@@ -1,0 +1,32 @@
+:root {
+  --bg: #f7f7fb;
+  --text: #0f172a;
+  --accent: #2563eb;
+}
+html,body,#root {
+  height: 100%;
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+body {
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  padding: 24px;
+}
+.app-root {
+  padding: 1.5rem;
+  max-width: 900px;
+  margin: 0 auto;
+}
+.app-root header h1 {
+  margin: 0 0 8px 0;
+  color: var(--accent);
+  font-size: 1.6rem;
+}
+.app-root header p {
+  margin: 0 0 16px 0;
+  color: rgba(17,24,39,0.8);
+}
