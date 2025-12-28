@@ -30,3 +30,182 @@ body {
   margin: 0 0 16px 0;
   color: rgba(17,24,39,0.8);
 }
+
+.summary-section h2 {
+  margin-top: 0;
+}
+
+/* type block */
+.summary-type {
+  margin-bottom: 12px;
+  padding: 8px;
+  border: 1px solid #e6e9ef;
+  border-radius: 6px;
+  background: #fff;
+}
+.summary-type-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* major group */
+.summary-major {
+  margin-top: 8px;
+}
+.summary-major-header {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.summary-amount {
+  color: #0f172a;
+}
+
+/* sub rows */
+.summary-subs {
+  margin-left: 12px;
+  margin-top: 6px;
+}
+.summary-sub {
+  display: flex;
+  justify-content: space-between;
+  padding: 2px 0;
+}
+.summary-sub-name {
+  color: #334155;
+}
+.summary-sub-amt {
+  color: #0f172a;
+}
+
+/* tabs */
+.tabs button {
+  background: transparent;
+  border: 1px solid #e6e9ef;
+  padding: 6px 10px;
+  margin-right: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.tabs button.active {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* entry form */
+.entry-section .entry-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.entry-section input[type="date"],
+.entry-section input[type="number"],
+.entry-section input,
+.entry-section select {
+  padding: 6px;
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+}
+
+/* calendar */
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  margin-top: 8px;
+}
+.calendar-weekday {
+  font-weight: 600;
+  text-align: center;
+  padding: 6px 0;
+}
+.calendar-cell {
+  min-height: 72px;
+  border: 1px solid #e6e9ef;
+  border-radius: 6px;
+  padding: 6px;
+  background: #fff;
+  cursor: pointer;
+}
+.calendar-cell.empty {
+  background: transparent;
+  border: none;
+}
+.calendar-cell-date {
+  font-size: 0.9rem;
+  color: #111827;
+}
+.calendar-cell-badges {
+  margin-top: 6px;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.badge {
+  padding: 2px 6px;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: white;
+}
+.badge.income {
+  background: green;
+}
+.badge.expense {
+  background: crimson;
+}
+
+/* daily view */
+.daily-section h2 {
+  margin-top: 0;
+}
+
+.daily-day-block {
+  background: #fff;
+  border: 1px solid #e6e9ef;
+  border-radius: 6px;
+  padding: 8px;
+  margin-bottom: 10px;
+}
+.daily-date-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+.daily-totals .daily-total {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 0.85rem;
+  margin-left: 6px;
+}
+.daily-totals .daily-total.income {
+  background: green;
+}
+.daily-totals .daily-total.expense {
+  background: crimson;
+}
+
+/* ...existing code... */
+
+.transaction-desc {
+  color: #475569;
+  font-size: 0.9rem;
+  margin-top: 4px;
+}
+
+.txn-amount.income {
+  color: green;
+  font-weight: 700;
+}
+
+.txn-amount.expense {
+  color: crimson;
+  font-weight: 700;
+}
+
+/* ...existing code... */

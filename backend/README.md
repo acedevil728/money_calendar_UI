@@ -16,7 +16,7 @@
 
    (대안 — backend 디렉터리에서 직접 실행 가능)
    cd backend
-   uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+   uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 
 3. Swagger UI:
    "$BROWSER" http://localhost:8000/docs

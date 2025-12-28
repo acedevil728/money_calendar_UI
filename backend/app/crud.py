@@ -1,9 +1,10 @@
 from sqlmodel import Session, select
 from .models import engine, Transaction, FixedExpense
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, Tuple
 from collections import defaultdict
 from datetime import date, datetime
 import calendar
+import logging
 
 def get_session():
     with Session(engine) as session:
@@ -12,6 +13,81 @@ def get_session():
 
 # Completed CRUD helpers for Transaction
 
+def _normalize_tx_dict(tx: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Normalize incoming dict so it can be passed to Transaction constructor.
+    - Map legacy 'type' -> 'direction' (SQLModel uses direction -> DB column "type")
+    - Coerce date strings to datetime.date
+    - Coerce amount strings to float
+    - Normalize direction/type to English canonical values: "Income" or "Expense"
+    - Raise ValueError on invalid date/amount so caller can handle/report
+    """
+    tx_copy = dict(tx)
+
+    # Normalize type/direction: prefer explicit 'direction' field; else map 'type' -> 'direction'
+    if "direction" in tx_copy and tx_copy["direction"] is not None:
+        tx_copy.pop("type", None)
+        raw_dir = tx_copy.get("direction")
+    else:
+        raw_dir = tx_copy.pop("type", tx_copy.get("direction", None))
+        if raw_dir is not None:
+            tx_copy["direction"] = raw_dir
+
+    # Normalize direction value to canonical English labels
+    def _canon_direction(v: Any) -> Optional[str]:
+        if v is None:
+            return None
+        s = str(v).strip().lower()
+        if not s:
+            return None
+        if "income" in s or "수입" in s:
+            return "Income"
+        if "expense" in s or "지출" in s:
+            return "Expense"
+        # fallback: use title-cased token (helpful for 'inc'/'exp' or 'INCOME')
+        return s.capitalize()
+
+    if "direction" in tx_copy:
+        tx_copy["direction"] = _canon_direction(tx_copy.get("direction"))
+
+    # remove stray 'type' key to avoid unexpected kwargs
+    tx_copy.pop("type", None)
+
+    # Coerce date strings -> datetime.date
+    d = tx_copy.get("date")
+    if isinstance(d, str):
+        s = d.strip()
+        parsed = None
+        # try common formats
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y"):
+            try:
+                parsed = datetime.strptime(s, fmt).date()
+                break
+            except Exception:
+                continue
+        if parsed is None:
+            # try ISO parser as a last resort
+            try:
+                parsed = datetime.fromisoformat(s).date()
+            except Exception:
+                raise ValueError(f"Invalid date format: '{d}'")
+        tx_copy["date"] = parsed
+
+    # Coerce amount to float (accept strings with commas)
+    amt = tx_copy.get("amount")
+    if isinstance(amt, str):
+        s = amt.strip().replace(",", "")
+        try:
+            tx_copy["amount"] = float(s)
+        except Exception:
+            raise ValueError(f"Invalid amount: '{amt}'")
+
+    # If amount is int, convert to float (consistent type)
+    if isinstance(tx_copy.get("amount"), int):
+        tx_copy["amount"] = float(tx_copy["amount"])
+
+    return tx_copy
+
 def create_transactions(transactions: List[Union[Dict[str, Any], Transaction]]) -> List[Transaction]:
     """
     Accepts a list of Transaction instances or dicts and persists them.
@@ -19,14 +95,8 @@ def create_transactions(transactions: List[Union[Dict[str, Any], Transaction]]) 
     """
     objs: List[Transaction] = []
     for tx in transactions:
-        # If tx is a dict, map/pop 'direction' into 'type' so constructors don't receive unexpected args.
         if isinstance(tx, dict):
-            if "direction" in tx:
-                if not tx.get("type"):
-                    tx["type"] = tx.pop("direction")
-                else:
-                    tx.pop("direction", None)
-            objs.append(Transaction(**tx))
+            objs.append(Transaction(**_normalize_tx_dict(tx)))
         else:
             objs.append(tx)
 
@@ -65,12 +135,25 @@ def update_transaction(transaction_id: int, patch: Dict[str, Any]) -> Optional[T
     """
     Apply a patch (dict of fields) to a transaction.
     Returns the updated Transaction or None if not found.
+    Patch values are normalized (dates, amounts, direction) before applying.
     """
+    # normalize patch in-place (but do not require all fields)
+    try:
+        normalized_patch = _normalize_tx_dict(dict(patch))
+    except ValueError as ve:
+        # bubble up to caller to convert to HTTP error handler
+        raise
+
     with Session(engine) as session:
         tx = session.get(Transaction, transaction_id)
         if not tx:
             return None
-        for k, v in patch.items():
+        for k, v in normalized_patch.items():
+            # map direction -> attribute name on model
+            if k == "direction":
+                setattr(tx, "direction", v)
+                continue
+            # ignore unknown fields that SQLModel doesn't have
             if hasattr(tx, k):
                 setattr(tx, k, v)
         session.add(tx)
@@ -114,34 +197,34 @@ def _iter_months(start: date, end: date):
         yield y, m
 
 
+def _compute_default_range(all_tx: List[Transaction]) -> Tuple[date, date]:
+    if all_tx:
+        dates = [t.date for t in all_tx if getattr(t, "date", None) is not None]
+        if dates:
+            return (min(dates), max(dates))
+    today = date.today()
+    start = date(today.year, today.month, 1)
+    last_day = calendar.monthrange(today.year, today.month)[1]
+    end = date(today.year, today.month, last_day)
+    return (start, end)
+
 def get_summary(start: Optional[date] = None, end: Optional[date] = None) -> Dict[str, Any]:
     """
     Return summary: total amount and totals by major -> sub categories.
     If start/end provided, include transactions and generated fixed expenses occurrences within that range.
     """
     with Session(engine) as session:
-        q = select(Transaction)
-        all_tx = session.exec(q).all()
+        all_tx = session.exec(select(Transaction)).all()
         fixed_list = session.exec(select(FixedExpense).where(FixedExpense.active == True)).all()
 
-    # determine default start/end if None: use range of transactions or current month
     if start is None or end is None:
-        dates = [t.date for t in all_tx if getattr(t, "date", None) is not None]
-        if dates:
-            min_d = min(dates)
-            max_d = max(dates)
-        else:
-            today = date.today()
-            min_d = date(today.year, today.month, 1)
-            last_day = calendar.monthrange(today.year, today.month)[1]
-            max_d = date(today.year, today.month, last_day)
+        default_start, default_end = _compute_default_range(all_tx)
         if start is None:
-            start = min_d
+            start = default_start
         if end is None:
-            end = max_d
+            end = default_end
 
     totals = {"total": 0.0, "by_major": {}}
-    # accumulate
     major_acc: Dict[str, float] = defaultdict(float)
     major_sub_acc: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
     total = 0.0
@@ -161,10 +244,8 @@ def get_summary(start: Optional[date] = None, end: Optional[date] = None) -> Dic
 
     # include fixed expenses occurrences
     for fe in fixed_list:
-        # compute effective period intersection
         fe_start = fe.start_date or start
         fe_end = fe.end_date or end
-        # intersection with requested range
         s = max(start, fe_start)
         e = min(end, fe_end)
         if s > e:
@@ -183,10 +264,66 @@ def get_summary(start: Optional[date] = None, end: Optional[date] = None) -> Dic
             major_sub_acc[major][sub] += amt
 
     totals["total"] = total
-    # build nested structure
     by_major = {}
     for major, mtotal in major_acc.items():
         subs = {sub: major_sub_acc[major][sub] for sub in major_sub_acc[major]}
         by_major[major] = {"total": mtotal, "sub_categories": subs}
     totals["by_major"] = by_major
     return totals
+
+def query_transactions(start: Optional[date] = None,
+                       end: Optional[date] = None,
+                       tx_type: Optional[str] = None,
+                       search: Optional[str] = None,
+                       page: int = 1,
+                       per_page: int = 100) -> Tuple[List[Transaction], int]:
+    """
+    Return (items, total_count) filtered by optional start/end (inclusive),
+    tx_type (substring match), search (searches major/sub/description/category),
+    with simple pagination (1-based page).
+    """
+    with Session(engine) as session:
+        stmt = select(Transaction)
+        if start:
+            stmt = stmt.where(Transaction.date >= start)
+        if end:
+            stmt = stmt.where(Transaction.date <= end)
+        if tx_type:
+            stmt = stmt.where(Transaction.direction.ilike(f"%{tx_type}%"))
+        if search:
+            q = f"%{search}%"
+            stmt = stmt.where(
+                (Transaction.major_category.ilike(q)) |
+                (Transaction.sub_category.ilike(q)) |
+                (Transaction.description.ilike(q)) |
+                (Transaction.category.ilike(q))
+            )
+        # order most recent first
+        stmt = stmt.order_by(Transaction.date.desc())
+        all_items = session.exec(stmt).all()
+        total = len(all_items)
+        # simple pagination in-memory (sufficient for dev)
+        start_idx = max((page - 1) * per_page, 0)
+        end_idx = start_idx + per_page
+        page_items = all_items[start_idx:end_idx]
+        return page_items, total
+
+def get_categories() -> Dict[str, List[str]]:
+    """
+    Return categories mapping: { "majors": [...], "subs": { major: [sub1, ...] } }
+    """
+    with Session(engine) as session:
+        stmt = select(Transaction.major_category, Transaction.sub_category)
+        results = session.exec(stmt).all()
+    majors = set()
+    subs_map: Dict[str, set] = {}
+    for major, sub in results:
+        if major:
+            majors.add(major)
+            subs_map.setdefault(major, set())
+            if sub:
+                subs_map[major].add(sub)
+    return {
+        "majors": sorted(list(majors)),
+        "subs": {k: sorted(list(v)) for k, v in subs_map.items()}
+    }

@@ -1,20 +1,5 @@
 import React, { useMemo } from "react";
-
-type Transaction = {
-  date: string;
-  type: string; // "income" | "expense" or localized string
-  major_category: string;
-  sub_category: string;
-  amount: number;
-  description?: string;
-};
-
-type SummaryNode = {
-  total: number;
-  subs: Record<string, number>;
-};
-
-type Summary = Record<string, Record<string, SummaryNode>>; // type -> major -> node
+import { Transaction, Summary, SummaryNode, fmtCurrency } from "../types";
 
 function fmt(n: number) {
   return n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
@@ -41,37 +26,44 @@ export default function SummaryView({ transactions }: { transactions: Transactio
     return k;
   };
 
+  function MajorBlock({ major, node }: { major: string; node: SummaryNode }) {
+    return (
+      <div className="summary-major" key={major}>
+        <div className="summary-major-header">
+          <span>{major}</span>
+          <span className="summary-amount">{fmtCurrency(node.total)}</span>
+        </div>
+        <div className="summary-subs">
+          {Object.entries(node.subs).map(([sub, amt]) => (
+            <div className="summary-sub" key={sub}>
+              <span className="summary-sub-name">{sub}</span>
+              <span className="summary-sub-amt">{fmtCurrency(amt)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <section style={{ marginTop: 16 }}>
+    <section className="summary-section" style={{ marginTop: 16 }}>
       <h2>금액 요약</h2>
       {transactions.length === 0 ? (
-        <div>거래 데이터가 없습니다. CSV를 업로드하거나 API에서 데이터를 로드하세요.</div>
+        <div>거래 데이터가 없습니다. 백엔드 API에서 데이터를 로드하세요.</div>
       ) : (
         Object.keys(summary).map((typeKey) => {
           const majors = summary[typeKey];
           const typeTotal = Object.values(majors).reduce((s, m) => s + m.total, 0);
           return (
-            <div key={typeKey} style={{ marginBottom: 12, padding: 8, border: "1px solid #e6e9ef", borderRadius: 6 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <div className="summary-type" key={typeKey}>
+              <div className="summary-type-header">
                 <strong>{typeDisplay(typeKey)}</strong>
-                <span>{fmt(typeTotal)}원</span>
+                <span className="summary-amount">{fmtCurrency(typeTotal)}</span>
               </div>
-              <div style={{ marginTop: 8 }}>
+
+              <div className="summary-majors">
                 {Object.entries(majors).map(([major, node]) => (
-                  <div key={major} style={{ marginTop: 8 }}>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontWeight: 600 }}>
-                      <span>{major}</span>
-                      <span>{fmt(node.total)}원</span>
-                    </div>
-                    <div style={{ marginLeft: 12, marginTop: 6 }}>
-                      {Object.entries(node.subs).map(([sub, amt]) => (
-                        <div key={sub} style={{ display: "flex", justifyContent: "space-between", padding: "2px 0" }}>
-                          <span style={{ color: "#334155" }}>{sub}</span>
-                          <span style={{ color: "#0f172a" }}>{fmt(amt)}원</span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                  <MajorBlock major={major} node={node} key={major} />
                 ))}
               </div>
             </div>

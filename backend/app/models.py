@@ -3,6 +3,7 @@ from typing import Optional
 from datetime import date
 import os
 from sqlalchemy import Column, String
+import logging
 
 # data directory and DB file
 DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
@@ -57,26 +58,27 @@ class FixedExpense(SQLModel, table=True):
     active: bool = True
 
 
+def _ensure_data_dir(path: str) -> None:
+    os.makedirs(path, exist_ok=True)
+
+def _ensure_columns(engine, table: str, cols: dict) -> None:
+    from sqlalchemy import text
+    with engine.begin() as conn:
+        res = conn.exec_driver_sql(f"PRAGMA table_info('{table}')").fetchall()
+        existing = [r[1] for r in res]
+        for col, col_type in cols.items():
+            if col not in existing:
+                try:
+                    conn.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{col}" {col_type}')
+                except Exception:
+                    logging.exception("Failed to add column %s to %s", col, table)
+                    # continue attempting others
+
 def create_db_and_tables() -> None:
     """Ensure data directory exists and create DB tables."""
-    os.makedirs(DATA_DIR, exist_ok=True)
-    # create tables if not exist
+    _ensure_data_dir(DATA_DIR)
     SQLModel.metadata.create_all(engine)
 
-    # Ensure transaction table has expected columns (add missing ones in-place)
-    from sqlalchemy import text
-
-    def _ensure_columns(table: str, cols: dict):
-        with engine.begin() as conn:
-            # get existing column names
-            res = conn.exec_driver_sql(f"PRAGMA table_info('{table}')").fetchall()
-            existing = [r[1] for r in res]  # PRAGMA returns rows where index 1 is name
-            for col, col_type in cols.items():
-                if col not in existing:
-                    # SQLite supports simple ADD COLUMN
-                    conn.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{col}" {col_type}')
-
-    # columns we expect on transaction table (types chosen as TEXT where appropriate)
     expected_tx_cols = {
         "major_category": "TEXT",
         "sub_category": "TEXT",
@@ -89,8 +91,7 @@ def create_db_and_tables() -> None:
     }
 
     try:
-        _ensure_columns("transaction", expected_tx_cols)
+        _ensure_columns(engine, "transaction", expected_tx_cols)
     except Exception:
-        # keep startup tolerant; if ALTER fails for unexpected reasons, surface nothing here
-        # (optional: log the exception if you have logging)
-        pass
+        # startup tolerant: 실패시 로깅만 하고 계속 진행
+        logging.exception("create_db_and_tables: _ensure_columns failed")
