@@ -19,6 +19,14 @@ export default function CalendarView({ transactions }: { transactions: Transacti
   const today = new Date();
   const base = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
 
+  // helper to build YYYY-MM-DD without using toISOString (avoids timezone shifts)
+  function pad(n: number) {
+    return String(n).padStart(2, "0");
+  }
+  function makeYMD(year: number, monthZeroBased: number, day: number) {
+    return `${year}-${pad(monthZeroBased + 1)}-${pad(day)}`;
+  }
+
   const days = useMemo(() => {
     const year = base.getFullYear();
     const month = base.getMonth();
@@ -27,20 +35,32 @@ export default function CalendarView({ transactions }: { transactions: Transacti
     const totalDays = lastDay.getDate();
     const startWeek = firstDay.getDay(); // 0..6
     const cells: Array<{ date?: string } | null> = [];
-    // pad leading
+    // leading padding so weekdays align
     for (let i = 0; i < startWeek; i++) cells.push(null);
     for (let d = 1; d <= totalDays; d++) {
-      const s = new Date(year, month, d).toISOString().slice(0, 10);
+      const s = makeYMD(year, month, d);
       cells.push({ date: s });
     }
+    // trailing padding to fill final week
+    const totalCells = cells.length;
+    const trailing = (7 - (totalCells % 7)) % 7;
+    for (let i = 0; i < trailing; i++) cells.push(null);
     return cells;
   }, [base]);
 
-  // group transactions by date string
+  // group transactions by date string (prefer using input string directly to avoid timezone shifts)
   const byDate = useMemo(() => {
     const m: Record<string, Transaction[]> = {};
     for (const t of transactions) {
-      const key = new Date(t.date).toISOString().slice(0, 10);
+      const key =
+        typeof t.date === "string" && t.date.length >= 10
+          ? t.date.slice(0, 10)
+          : (() => {
+              const d = new Date(t.date);
+              if (isNaN(d.getTime())) return "";
+              return makeYMD(d.getFullYear(), d.getMonth(), d.getDate());
+            })();
+      if (!key) continue;
       if (!m[key]) m[key] = [];
       m[key].push(t);
     }
@@ -70,10 +90,10 @@ export default function CalendarView({ transactions }: { transactions: Transacti
         {days.map((cell, idx) =>
           cell ? (
             <div key={idx} className="calendar-cell" onClick={() => setSelectedDate(cell.date)}>
-              <div className="calendar-cell-date">{cell.date.slice(8, 10)}</div>
+              <div className="calendar-cell-date">{cell.date!.slice(8, 10)}</div>
               <div className="calendar-cell-badges">
                 {(() => {
-                  const list = byDate[cell.date] || [];
+                  const list = byDate[cell.date!] || [];
                   const sums = sumList(list);
                   return (
                     <>

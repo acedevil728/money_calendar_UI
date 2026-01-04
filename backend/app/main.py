@@ -3,8 +3,8 @@ from fastapi.responses import StreamingResponse, PlainTextResponse
 from sqlmodel import Session
 from datetime import datetime, date
 from typing import Optional, List
-from .models import create_db_and_tables
-from .crud import get_session, create_transactions_bulk, list_transactions, get_summary, create_fixed_expense, list_fixed_expenses, query_transactions, get_transaction, get_categories, get_transactions, update_transaction, delete_transaction, get_fixed_expense, update_fixed_expense, delete_fixed_expense, create_saving, list_savings, get_saving, update_saving, delete_saving, forecast_savings
+from .models_core import create_db_and_tables
+from .crud import get_session, create_transactions_bulk, list_transactions, get_summary, create_fixed_expense, list_fixed_expenses, query_transactions, get_transaction, get_categories, get_transactions, update_transaction, delete_transaction, get_fixed_expense, update_fixed_expense, delete_fixed_expense, create_saving, list_savings, get_saving, update_saving, delete_saving, forecast_savings, get_setting_categories, set_setting_categories
 import logging
 import csv
 
@@ -369,3 +369,32 @@ def api_savings_forecast(date: Optional[str] = Query(None)):
     except Exception:
         logging.exception("forecast_savings failed")
         raise HTTPException(status_code=500, detail="forecast error")
+
+# --- Settings endpoints ---
+@app.get("/api/settings/categories")
+def api_settings_get_categories():
+    """
+    Return persisted lists for settings: { majors: [...], subs: [...] }.
+    Falls back to empty lists if none persisted.
+    """
+    try:
+        return get_setting_categories()
+    except Exception:
+        logging.exception("get_setting_categories failed")
+        raise HTTPException(status_code=500, detail="settings/categories error")
+
+@app.post("/api/settings/categories")
+def api_settings_post_categories(payload: dict):
+    """
+    Replace persisted categories. Expected payload: { majors: string[], subs: string[] }.
+    Returns saved lists on success.
+    """
+    majors = payload.get("majors") if isinstance(payload.get("majors"), list) else []
+    subs = payload.get("subs") if isinstance(payload.get("subs"), list) else []
+    try:
+        set_setting_categories(majors, subs)
+        # return authoritative lists so client doesn't need extra GET
+        return get_setting_categories()
+    except Exception:
+        logging.exception("set_setting_categories failed")
+        raise HTTPException(status_code=500, detail="failed to persist categories")

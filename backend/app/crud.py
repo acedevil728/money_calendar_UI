@@ -1,5 +1,5 @@
 from sqlmodel import Session, select
-from .models import engine, Transaction, FixedExpense, Saving
+from .models_core import engine, Transaction, FixedExpense, Saving, CategoryMajor, CategorySub
 from typing import List, Optional, Dict, Any, Union, Tuple
 from collections import defaultdict
 from datetime import date, datetime
@@ -636,3 +636,42 @@ def forecast_savings(on_date: date) -> Dict[str, Any]:
             "contribution_amount": s.contribution_amount,
         })
     return {"date": on_date.isoformat(), "total": total, "items": items}
+
+def get_setting_categories() -> Dict[str, List[str]]:
+    """Return persisted major and sub lists from dedicated tables."""
+    with Session(engine) as session:
+        majors = session.exec(select(CategoryMajor.name)).all()
+        subs = session.exec(select(CategorySub.name)).all()
+    # session.exec(select(...)) returns list of tuples/values; normalize to simple list
+    majors_list = [m for m in majors] if majors else []
+    subs_list = [s for s in subs] if subs else []
+    return {"majors": sorted(list(dict.fromkeys(majors_list))), "subs": sorted(list(dict.fromkeys(subs_list)))}
+
+def set_setting_categories(majors: List[str], subs: List[str]) -> None:
+    """
+    Replace persisted majors/subs with provided lists.
+    This implementation deletes existing rows and inserts new ones.
+    """
+    with Session(engine) as session:
+        # delete all existing rows
+        existing_majors = session.exec(select(CategoryMajor)).all()
+        for em in existing_majors:
+            session.delete(em)
+        existing_subs = session.exec(select(CategorySub)).all()
+        for es in existing_subs:
+            session.delete(es)
+        session.commit()
+
+        # insert new majors
+        for m in (majors or []):
+            name = (m or "").strip()
+            if not name:
+                continue
+            session.add(CategoryMajor(name=name))
+        # insert new subs
+        for s in (subs or []):
+            name = (s or "").strip()
+            if not name:
+                continue
+            session.add(CategorySub(name=name))
+        session.commit()

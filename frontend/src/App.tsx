@@ -5,6 +5,7 @@ import CalendarView from "./components/CalendarView";
 import DailyView from "./components/DailyView";
 import FixedExpensesView from "./components/FixedExpensesView";
 import SavingsView from "./components/SavingsView";
+import SettingsView from "./components/SettingsView";
 import { Transaction } from "./types";
 
 export default function App(): JSX.Element {
@@ -12,12 +13,47 @@ export default function App(): JSX.Element {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // UI tabs: added fixed / savings
-  const [tab, setTab] = useState<"summary" | "entries" | "calendar" | "daily" | "fixed" | "savings">("summary");
+  // UI tabs: added fixed / savings / settings
+  const [tab, setTab] = useState<"summary" | "entries" | "calendar" | "daily" | "fixed" | "savings" | "settings">("summary");
 
-  // date filter
-  const [startDate, setStartDate] = useState<string>("");
-  const [endDate, setEndDate] = useState<string>("");
+  // date filter: default to current month (build YYYY-MM-DD locally, avoid toISOString timezone shift)
+  function pad(n: number) { return String(n).padStart(2, "0"); }
+  function makeYMD(year: number, monthZeroBased: number, day: number) {
+    return `${year}-${pad(monthZeroBased + 1)}-${pad(day)}`;
+  }
+  const makeMonthRange = () => {
+    const now = new Date();
+    const first = new Date(now.getFullYear(), now.getMonth(), 1);
+    const last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+    return {
+      start: makeYMD(first.getFullYear(), first.getMonth(), first.getDate()),
+      end: makeYMD(last.getFullYear(), last.getMonth(), last.getDate()),
+    };
+  };
+  const monthRange = makeMonthRange();
+  const [startDate, setStartDate] = useState<string>(monthRange.start);
+  const [endDate, setEndDate] = useState<string>(monthRange.end);
+
+  // majors/subs settings (loaded from backend)
+  const [majors, setMajors] = useState<string[]>([]);
+  const [subs, setSubs] = useState<string[]>([]);
+
+  // load categories from backend on mount
+  useEffect(() => {
+    async function loadCategories() {
+      try {
+        const r = await fetch("/api/settings/categories");
+        if (!r.ok) throw new Error("no categories");
+        const data = await r.json();
+        setMajors(Array.isArray(data.majors) ? data.majors : []);
+        setSubs(Array.isArray(data.subs) ? data.subs : []);
+      } catch {
+        setMajors([]);
+        setSubs([]);
+      }
+    }
+    loadCategories();
+  }, []);
 
   // helper: map backend type -> 한글표시
   const mapTypeToKorean = (raw: string | undefined | null) => {
@@ -58,16 +94,22 @@ export default function App(): JSX.Element {
       });
   }, []);
 
+  // helper to extract YYYY-MM-DD from transaction safely
+  function txYmd(t: Transaction) {
+    if (typeof t.date === "string" && t.date.length >= 10) return t.date.slice(0, 10);
+    const d = new Date(t.date);
+    if (isNaN(d.getTime())) return "";
+    return makeYMD(d.getFullYear(), d.getMonth(), d.getDate());
+  }
+
   // helper: filter by date strings (inclusive). If filter empty, pass all.
   const filteredTransactions = useMemo(() => {
     if (!startDate && !endDate) return transactions;
-    const start = startDate ? new Date(startDate) : null;
-    const end = endDate ? new Date(endDate) : null;
     return transactions.filter((t) => {
-      const d = new Date(t.date);
-      if (isNaN(d.getTime())) return false;
-      if (start && d < start) return false;
-      if (end && d > end) return false;
+      const key = txYmd(t);
+      if (!key) return false;
+      if (startDate && key < startDate) return false;
+      if (endDate && key > endDate) return false;
       return true;
     });
   }, [transactions, startDate, endDate]);
@@ -176,6 +218,40 @@ export default function App(): JSX.Element {
     }
   }
 
+  // update handlers to accept settings changes from SettingsView and persist to backend
+  async function handleSettingsChange(newMajors: string[], newSubs: string[]) {
+    // optimistic update so UI is responsive
+    setMajors(newMajors);
+    setSubs(newSubs);
+    try {
+      const res = await fetch("/api/settings/categories", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ majors: newMajors, subs: newSubs }),
+      });
+      if (res.ok) {
+        // if server returns authoritative lists, use them
+        try {
+          const data = await res.json();
+          setMajors(Array.isArray(data.majors) ? data.majors : newMajors);
+          setSubs(Array.isArray(data.subs) ? data.subs : newSubs);
+          return;
+        } catch {
+          // no JSON body — fallback to explicit GET below
+        }
+      }
+      // fallback: re-fetch authoritative lists
+      const r = await fetch("/api/settings/categories");
+      if (r.ok) {
+        const data = await r.json();
+        setMajors(Array.isArray(data.majors) ? data.majors : []);
+        setSubs(Array.isArray(data.subs) ? data.subs : []);
+      }
+    } catch {
+      // ignore network errors; UI already updated optimistically
+    }
+  }
+
   return (
     <div className="app-root">
       <header>
@@ -190,6 +266,7 @@ export default function App(): JSX.Element {
         <button onClick={() => setTab("daily")} className={tab === "daily" ? "active" : ""}>Daily</button>
         <button onClick={() => setTab("fixed")} className={tab === "fixed" ? "active" : ""}>Fixed Expenses</button>
         <button onClick={() => setTab("savings")} className={tab === "savings" ? "active" : ""}>Savings</button>
+        <button onClick={() => setTab("settings")} className={tab === "settings" ? "active" : ""}>Settings</button>
       </nav>
 
       <section style={{ margin: "12px 0" }}>
@@ -197,6 +274,7 @@ export default function App(): JSX.Element {
         <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
         <label style={{ margin: "0 8px" }}>End:</label>
         <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+        <button style={{ marginLeft: 12 }} onClick={() => { const mr = makeMonthRange(); setStartDate(mr.start); setEndDate(mr.end); }}>This month</button>
         <button style={{ marginLeft: 12 }} onClick={() => { setStartDate(""); setEndDate(""); }}>Clear</button>
         <button style={{ marginLeft: 12 }} onClick={exportSummaryCsv}>Export Summary CSV</button>
         <button style={{ marginLeft: 12 }} onClick={exportDailyCsv}>Export Daily CSV</button>
@@ -206,11 +284,12 @@ export default function App(): JSX.Element {
 
       <main>
         {tab === "summary" && <SummaryView transactions={filteredTransactions} />}
-        {tab === "entries" && <TransactionForm onSaveBatch={handleAddTransactions} />}
+        {tab === "entries" && <TransactionForm onSaveBatch={handleAddTransactions} majors={majors} subs={subs} />}
         {tab === "calendar" && <CalendarView transactions={filteredTransactions} />}
         {tab === "daily" && <DailyView transactions={filteredTransactions} onDelete={handleDeleteTransaction} />}
-        {tab === "fixed" && <FixedExpensesView />}
+        {tab === "fixed" && <FixedExpensesView majors={majors} subs={subs} />}
         {tab === "savings" && <SavingsView />}
+        {tab === "settings" && <SettingsView majorsInit={majors} subsInit={subs} onChange={handleSettingsChange} />}
       </main>
     </div>
   );

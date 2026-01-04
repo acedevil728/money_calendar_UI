@@ -117,5 +117,5 @@ def create_db_and_tables() -> None:
     try:
         _ensure_columns(engine, "transaction", expected_tx_cols)
     except Exception:
-        # startup tolerant: 실패시 로깅만 하고 계속 진행
+        # startup tolerant: log and continue
         logging.exception("create_db_and_tables: _ensure_columns failed")

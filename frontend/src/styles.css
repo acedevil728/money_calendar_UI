@@ -14,11 +14,11 @@ body {
   font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  padding: 24px;
+  padding: 20px; /* reverted to previous */
 }
 .app-root {
-  padding: 1.5rem;
-  max-width: 900px;
+  padding: 1.5rem;   /* reverted to previous */
+  max-width: 1100px; /* reverted to previous */
   margin: 0 auto;
 }
 .app-root header h1 {
@@ -96,18 +96,78 @@ body {
 
 /* entry form */
 .entry-section .entry-row {
-  display: flex;
+  display: grid;
   gap: 8px;
   align-items: center;
   margin-bottom: 6px;
+  /* columns: date / type / major / sub / amount / desc / actions */
+  grid-template-columns: 140px 90px 1fr 1fr 110px 1fr 40px;
 }
+
+/* header style variant keeps same grid but bolder */
+.entry-section .entry-row.header {
+  font-weight: 600;
+}
+
+/* generic form-grid usable by other components (fixed expenses) */
+.form-grid {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+  grid-template-columns: 140px 120px 110px 120px 120px 70px 1fr 40px;
+}
+
+/* savings specific layout (wider first column for name) */
+.savings-grid {
+  display: grid;
+  gap: 8px;
+  align-items: center;
+  /* tuned columns: name | kind | initial | contribution | start | end | day | actions */
+  grid-template-columns: 1fr 110px 100px 110px 110px 80px 60px 140px;
+}
+
+/* ensure the action area stacks buttons vertically on narrow widths */
+.savings-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+/* checkbox cell alignment */
+.savings-checkbox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+/* small-screen adjustments: collapse into fewer columns / stacked */
+@media (max-width: 900px) {
+  .entry-section .entry-row,
+  .form-grid,
+  .savings-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  /* actions/buttons go full width on small screens */
+  .entry-section .entry-row > :last-child,
+  .form-grid > :last-child,
+  .savings-grid > :last-child {
+    grid-column: 1 / -1;
+  }
+}
+
+/* ensure inputs and selects fill their grid cell */
 .entry-section input[type="date"],
 .entry-section input[type="number"],
 .entry-section input,
-.entry-section select {
-  padding: 6px;
-  border: 1px solid #d1d5db;
-  border-radius: 4px;
+.entry-section select,
+.form-grid input,
+.form-grid select,
+.savings-grid input,
+.savings-grid select {
+  width: 100%;
+  box-sizing: border-box;
 }
 
 /* calendar */
@@ -206,6 +266,15 @@ body {
 .txn-amount.expense {
   color: crimson;
   font-weight: 700;
+}
+
+/* ...existing code... */
+
+.savings-buttons {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-start;
+  align-items: center;
 }
 
 /* ...existing code... */

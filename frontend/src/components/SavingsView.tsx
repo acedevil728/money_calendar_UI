@@ -114,43 +114,120 @@ export default function SavingsView() {
     }
   }
 
+  function exportSavingsCsv() {
+    const esc = (v: any) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows: string[] = [["id", "name", "kind", "initial_balance", "contribution_amount", "start_date", "end_date", "day_of_month", "frequency", "withdrawn"].join(",")];
+    items.forEach((it) => {
+      rows.push([
+        esc(it.id),
+        esc(it.name),
+        esc(it.kind),
+        String(it.initial_balance ?? ""),
+        String(it.contribution_amount ?? ""),
+        esc(it.start_date),
+        esc(it.end_date),
+        String(it.day_of_month ?? ""),
+        esc(it.frequency),
+        String(!!it.withdrawn),
+      ].join(","));
+    });
+    const blob = new Blob([rows.join("\n")], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `savings_export_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <section style={{ marginTop: 12 }}>
       <h2>저축 (Savings)</h2>
 
       <div style={{ marginBottom: 8 }}>
-        <strong>새 저축 추가/수정</strong>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <input placeholder="Name" value={form.name || ""} onChange={(e) => setField("name", e.target.value)} />
-          <select value={form.kind || "적금"} onChange={(e) => setField("kind", e.target.value)}>
-            <option>적금</option>
-            <option>예금</option>
-            <option>파킹</option>
-            <option>주식</option>
-            <option>기타</option>
-          </select>
-          <input placeholder="Initial" type="number" value={form.initial_balance ?? 0} onChange={(e) => setField("initial_balance", Number(e.target.value))} />
-          <input placeholder="Contribution" type="number" value={form.contribution_amount ?? 0} onChange={(e) => setField("contribution_amount", Number(e.target.value))} />
-          <input type="date" value={form.start_date || ""} onChange={(e) => setField("start_date", e.target.value)} />
-          <input type="date" value={form.end_date || ""} onChange={(e) => setField("end_date", e.target.value)} />
-          <input placeholder="Day" type="number" value={form.day_of_month ?? 1} onChange={(e) => setField("day_of_month", Number(e.target.value))} />
-          <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-            출금
+        <strong>New Saving</strong>
+      </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <div className="savings-grid" style={{ fontWeight: 600 }}>
+          <div>Name</div>
+          <div>Kind</div>
+          <div>Initial</div>
+          <div>Contribution</div>
+          <div>Start</div>
+          <div>End</div>
+          <div>Day</div>
+          <div>Withdrawn</div>
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <div className="savings-grid" style={{ marginTop: 8 }}>
+          <div><input placeholder="Name" value={form.name || ""} onChange={(e) => setField("name", e.target.value)} /></div>
+          <div>
+            <select value={form.kind || "적금"} onChange={(e) => setField("kind", e.target.value)}>
+              <option>적금</option>
+              <option>예금</option>
+              <option>파킹</option>
+              <option>주식</option>
+              <option>기타</option>
+            </select>
+          </div>
+          <div><input placeholder="Initial" type="number" value={form.initial_balance ?? 0} onChange={(e) => setField("initial_balance", Number(e.target.value))} /></div>
+          <div><input placeholder="Contribution" type="number" value={form.contribution_amount ?? 0} onChange={(e) => setField("contribution_amount", Number(e.target.value))} /></div>
+          <div><input type="date" value={form.start_date || ""} onChange={(e) => setField("start_date", e.target.value)} /></div>
+          <div><input type="date" value={form.end_date || ""} onChange={(e) => setField("end_date", e.target.value)} /></div>
+
+          {/* Day column: only the day input (actions moved below) */}
+          <div>
+            <input placeholder="Day" type="number" value={form.day_of_month ?? 1} onChange={(e) => setField("day_of_month", Number(e.target.value))} />
+          </div>
+
+          {/* Withdrawn column: only the checkbox, no other text */}
+          <div className="savings-checkbox" style={{ justifyContent: "center" }}>
             <input type="checkbox" checked={!!form.withdrawn} onChange={(e) => setField("withdrawn", e.target.checked)} />
-          </label>
+          </div>
+        </div>
+
+        {/* Actions row below grid, left-aligned */}
+        <div style={{ display: "flex", justifyContent: "flex-start", gap: 8, marginTop: 8 }}>
           <button onClick={submit}>{editingId ? "Update" : "Create"}</button>
-          {editingId && <button onClick={() => { setEditingId(null); setForm({ name: "", kind: "적금", initial_balance: 0, contribution_amount: 0, start_date: "", end_date: "", day_of_month: 1, frequency: "monthly", withdrawn: false }); }}>Cancel</button>}
+          {editingId && (
+            <button
+              onClick={() => {
+                setEditingId(null);
+                setForm({
+                  name: "",
+                  kind: "적금",
+                  initial_balance: 0,
+                  contribution_amount: 0,
+                  start_date: "",
+                  end_date: "",
+                  day_of_month: 1,
+                  frequency: "monthly",
+                  withdrawn: false,
+                });
+              }}
+            >
+              Cancel
+            </button>
+          )}
         </div>
       </div>
 
       <div style={{ marginBottom: 12 }}>
         <h3>목록</h3>
+        <div style={{ marginBottom: 8 }}>
+          <button onClick={exportSavingsCsv}>Export Savings CSV</button>
+        </div>
         {loading ? <div>Loading...</div> : items.length === 0 ? <div>없음</div> : (
           <div style={{ display: "grid", gap: 8 }}>
             {items.map((it) => (
               <div key={it.id} style={{ padding: 8, border: "1px solid #e6e9ef", borderRadius: 6, background: "#fff", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <div><strong>{it.name || it.kind}</strong> — {it.kind} {it.withdrawn ? "(출금)" : ""}</div>
+                  <div><strong>{it.name || it.kind}</strong> — {it.kind} {it.withdrawn ? "(Withdrawn)" : ""}</div>
                   <div style={{ fontSize: 12, color: "#666" }}>초기 {fmtCurrency(it.initial_balance || 0)} / 매회 {fmtCurrency(it.contribution_amount || 0)} / {it.start_date ?? "—"} → {it.end_date ?? "—"}</div>
                 </div>
                 <div style={{ display: "flex", gap: 8 }}>

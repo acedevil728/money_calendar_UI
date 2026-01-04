@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { FixedExpense } from "../types";
 
-export default function FixedExpensesView() {
+export default function FixedExpensesView({ majors = [], subs = [] }: { majors?: string[]; subs?: string[] }) {
   const [items, setItems] = useState<FixedExpense[]>([]);
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState<Partial<FixedExpense>>({
@@ -37,6 +37,10 @@ export default function FixedExpensesView() {
     setForm((f) => ({ ...f, [k]: v }));
   }
 
+  function checkChoice(value: string, list: string[]) {
+    return list.length === 0 ? true : list.includes(value);
+  }
+
   async function submit() {
     // validate required fields
     const req = ["major_category", "sub_category", "amount", "start_date", "end_date", "day_of_month"] as const;
@@ -46,6 +50,15 @@ export default function FixedExpensesView() {
         alert(`필수: ${k}`);
         return;
       }
+    }
+    // enforce membership in lists if lists exist
+    if (!checkChoice(String(form.major_category || ""), majors)) {
+      alert("Major 값은 설정된 목록에 있어야 합니다.");
+      return;
+    }
+    if (!checkChoice(String(form.sub_category || ""), subs)) {
+      alert("Sub 값은 설정된 목록에 있어야 합니다.");
+      return;
     }
     try {
       if (editingId) {
@@ -105,18 +118,83 @@ export default function FixedExpensesView() {
   return (
     <section style={{ marginTop: 12 }}>
       <h2>고정 지출 (Fixed Expenses)</h2>
+
+      {/* new-label above header */}
       <div style={{ marginBottom: 8 }}>
         <strong>새 고정 지출 추가/수정</strong>
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <input placeholder="Major" value={form.major_category || ""} onChange={(e) => setField("major_category", e.target.value)} />
-          <input placeholder="Sub" value={form.sub_category || ""} onChange={(e) => setField("sub_category", e.target.value)} />
-          <input placeholder="Amount" type="number" value={form.amount ?? 0} onChange={(e) => setField("amount", Number(e.target.value))} />
-          <input type="date" value={form.start_date || ""} onChange={(e) => setField("start_date", e.target.value)} />
-          <input type="date" value={form.end_date || ""} onChange={(e) => setField("end_date", e.target.value)} />
-          <input placeholder="Day" type="number" value={form.day_of_month ?? 1} onChange={(e) => setField("day_of_month", Number(e.target.value))} />
-          <input placeholder="Description" value={form.description || ""} onChange={(e) => setField("description", e.target.value)} />
-          <button onClick={submit}>{editingId ? "Update" : "Create"}</button>
-          {editingId && <button onClick={() => { setEditingId(null); setForm({ major_category: "", sub_category: "", amount: 0, start_date: new Date().toISOString().slice(0,10), end_date: new Date().toISOString().slice(0,10), day_of_month: 1 }); }}>Cancel</button>}
+      </div>
+
+      {/* description/header row aligned with inputs */}
+      <div style={{ marginBottom: 8 }}>
+        <div className="form-grid" style={{ fontWeight: 600 }}>
+          <div>Major</div>
+          <div>Sub</div>
+          <div>Amount</div>
+          <div>Start</div>
+          <div>End</div>
+          <div>Day</div>
+          <div>Description</div>
+          <div />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 8 }}>
+        <div className="form-grid" style={{ marginTop: 8 }}>
+          <div>
+            <input
+              placeholder="Major"
+              value={form.major_category || ""}
+              onChange={(e) => setField("major_category", e.target.value)}
+              list="majors-list-fixed"
+              onBlur={(e) => {
+                if (majors.length > 0 && e.target.value && !majors.includes(e.target.value)) {
+                  alert("Major 값은 설정된 목록에 있어야 합니다.");
+                  setField("major_category", "");
+                }
+              }}
+            />
+            <datalist id="majors-list-fixed">
+              {majors.map((m) => <option key={m} value={m} />)}
+            </datalist>
+          </div>
+
+          <div>
+            <input
+              placeholder="Sub"
+              value={form.sub_category || ""}
+              onChange={(e) => setField("sub_category", e.target.value)}
+              list="subs-list-fixed"
+              onBlur={(e) => {
+                if (subs.length > 0 && e.target.value && !subs.includes(e.target.value)) {
+                  alert("Sub 값은 설정된 목록에 있어야 합니다.");
+                  setField("sub_category", "");
+                }
+              }}
+            />
+            <datalist id="subs-list-fixed">
+              {subs.map((s) => <option key={s} value={s} />)}
+            </datalist>
+          </div>
+
+          <div>
+            <input placeholder="Amount" type="number" value={form.amount ?? 0} onChange={(e) => setField("amount", Number(e.target.value))} />
+          </div>
+          <div>
+            <input type="date" value={form.start_date || ""} onChange={(e) => setField("start_date", e.target.value)} />
+          </div>
+          <div>
+            <input type="date" value={form.end_date || ""} onChange={(e) => setField("end_date", e.target.value)} />
+          </div>
+          <div>
+            <input placeholder="Day" type="number" value={form.day_of_month ?? 1} onChange={(e) => setField("day_of_month", Number(e.target.value))} />
+          </div>
+          <div>
+            <input placeholder="Description" value={form.description || ""} onChange={(e) => setField("description", e.target.value)} />
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={submit}>{editingId ? "Update" : "Create"}</button>
+            {editingId && <button onClick={() => { setEditingId(null); setForm({ major_category: "", sub_category: "", amount: 0, start_date: new Date().toISOString().slice(0,10), end_date: new Date().toISOString().slice(0,10), day_of_month: 1 }); }}>Cancel</button>}
+          </div>
         </div>
       </div>
 
