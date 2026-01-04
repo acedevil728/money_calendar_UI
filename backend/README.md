@@ -10,9 +10,9 @@
    source .venv/bin/activate
    pip install -r requirements.txt
 
-2. 프로젝트 루트에서 서버 실행 (권장 — 엔트리포인트 충돌 방지):
+2. 프로젝트 루트에서 서버 실행 (권장 — 모듈 경로를 사용)
    cd /workspaces/money_calendar_UI
-   uvicorn asgi:app --reload --host 0.0.0.0 --port 8000
+   uvicorn backend.asgi:app --reload --host 0.0.0.0 --port 8000
 
    (대안 — backend 디렉터리에서 직접 실행 가능)
    cd backend

@@ -58,6 +58,20 @@ class FixedExpense(SQLModel, table=True):
     active: bool = True
 
 
+class Saving(SQLModel, table=True):
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: Optional[str] = None
+    kind: str
+    initial_balance: float = 0.0
+    contribution_amount: float = 0.0
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    day_of_month: Optional[int] = None
+    frequency: Optional[str] = "monthly"
+    withdrawn: bool = False
+    active: bool = True
+
+
 def _ensure_data_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 

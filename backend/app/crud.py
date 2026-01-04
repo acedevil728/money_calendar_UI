@@ -1,5 +1,5 @@
 from sqlmodel import Session, select
-from .models import engine, Transaction, FixedExpense
+from .models import engine, Transaction, FixedExpense, Saving
 from typing import List, Optional, Dict, Any, Union, Tuple
 from collections import defaultdict
 from datetime import date, datetime
@@ -88,6 +88,32 @@ def _normalize_tx_dict(tx: Dict[str, Any]) -> Dict[str, Any]:
 
     return tx_copy
 
+def _coerce_date(val, name: str = "date") -> Optional[date]:
+    """Convert strings/datetimes to datetime.date. Return None if val is None."""
+    if val is None:
+        return None
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        # try common formats
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y"):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except Exception:
+                continue
+        # try ISO
+        try:
+            return datetime.fromisoformat(s).date()
+        except Exception:
+            raise ValueError(f"Invalid {name} format: '{val}'")
+    # unsupported type
+    raise ValueError(f"Invalid {name} type: {type(val)}")
+
 def create_transactions(transactions: List[Union[Dict[str, Any], Transaction]]) -> List[Transaction]:
     """
     Accepts a list of Transaction instances or dicts and persists them.
@@ -174,17 +200,163 @@ def delete_transaction(transaction_id: int) -> bool:
 
 
 def create_fixed_expense(data: Dict[str, Any]) -> FixedExpense:
-    fe = FixedExpense(**data)
+    """
+    Create FixedExpense and generate Transaction occurrences for each month in the range.
+    Expects required fields: major_category, sub_category, amount, start_date, end_date, day_of_month
+    Generated transactions get raw_source="fixed:{fixed_id}" so they can be removed later.
+    """
+    # validate required
+    req = ["major_category", "sub_category", "amount", "start_date", "end_date", "day_of_month"]
+    for k in req:
+        if k not in data or data[k] in (None, ""):
+            raise ValueError(f"Missing required field: {k}")
+
+    # coerce types
+    try:
+        start = _coerce_date(data["start_date"], "start_date")
+        end = _coerce_date(data["end_date"], "end_date")
+    except ValueError:
+        raise
+
+    try:
+        amt = float(data["amount"])
+    except Exception:
+        raise ValueError(f"Invalid amount: {data.get('amount')}")
+    try:
+        dom = int(data["day_of_month"])
+    except Exception:
+        raise ValueError(f"Invalid day_of_month: {data.get('day_of_month')}")
+
+    fe = FixedExpense(
+        major_category=data["major_category"],
+        sub_category=data["sub_category"],
+        description=data.get("description"),
+        amount=amt,
+        start_date=start,
+        end_date=end,
+        day_of_month=dom,
+        active=data.get("active", True)
+    )
+
+    occurrences: List[Transaction] = []
     with Session(engine) as session:
         session.add(fe)
         session.commit()
         session.refresh(fe)
+
+        # generate transactions for each month in range
+        s = fe.start_date
+        e = fe.end_date
+        for y, m in _iter_months(s, e):
+            last_day = calendar.monthrange(y, m)[1]
+            day = min(fe.day_of_month, last_day)
+            occ_date = date(y, m, day)
+            # create transaction linked to fixed expense
+            tx = Transaction(
+                date=occ_date,
+                amount=float(fe.amount),
+                direction="Expense",
+                major_category=fe.major_category,
+                sub_category=fe.sub_category,
+                description=fe.description,
+                raw_source=f"fixed:{fe.id}"
+            )
+            session.add(tx)
+            occurrences.append(tx)
+        session.commit()
+        for t in occurrences:
+            session.refresh(t)
     return fe
 
+def delete_fixed_expense(fe_id: int) -> bool:
+    """
+    Delete FixedExpense and all generated Transaction occurrences that reference it.
+    Returns True if deleted, False if not found.
+    """
+    with Session(engine) as session:
+        fe = session.get(FixedExpense, fe_id)
+        if not fe:
+            return False
+        # delete generated transactions
+        pattern = f"fixed:{fe_id}"
+        # use .raw_source field match
+        stmt = select(Transaction).where(Transaction.raw_source == pattern)
+        generated = session.exec(stmt).all()
+        for g in generated:
+            session.delete(g)
+        session.delete(fe)
+        session.commit()
+    return True
+
+def update_fixed_expense(fe_id: int, patch: Dict[str, Any]) -> Optional[FixedExpense]:
+    """
+    Update FixedExpense. For simplicity, if update succeeds we delete previously generated transactions
+    for this fixed expense and re-generate occurrences based on the new/current values.
+    """
+    with Session(engine) as session:
+        fe = session.get(FixedExpense, fe_id)
+        if not fe:
+            return None
+        # apply patch fields (coerce dates/numbers where appropriate)
+        for k, v in patch.items():
+            if not hasattr(fe, k):
+                continue
+            if k in ("start_date", "end_date"):
+                v = _coerce_date(v, k)
+            if k == "amount":
+                try:
+                    v = float(v)
+                except Exception:
+                    raise ValueError(f"Invalid amount: {patch.get('amount')}")
+            if k == "day_of_month":
+                try:
+                    v = int(v)
+                except Exception:
+                    raise ValueError(f"Invalid day_of_month: {patch.get('day_of_month')}")
+            setattr(fe, k, v)
+        session.add(fe)
+        session.commit()
+        session.refresh(fe)
+
+        # remove previously generated transactions
+        pattern = f"fixed:{fe_id}"
+        stmt = select(Transaction).where(Transaction.raw_source == pattern)
+        prev = session.exec(stmt).all()
+        for p in prev:
+            session.delete(p)
+        session.commit()
+
+        # re-generate occurrences
+        occurrences: List[Transaction] = []
+        s = fe.start_date
+        e = fe.end_date
+        for y, m in _iter_months(s, e):
+            last_day = calendar.monthrange(y, m)[1]
+            day = min(fe.day_of_month, last_day)
+            occ_date = date(y, m, day)
+            tx = Transaction(
+                date=occ_date,
+                amount=float(fe.amount),
+                direction="Expense",
+                major_category=fe.major_category,
+                sub_category=fe.sub_category,
+                description=fe.description,
+                raw_source=f"fixed:{fe.id}"
+            )
+            session.add(tx)
+            occurrences.append(tx)
+        session.commit()
+        for t in occurrences:
+            session.refresh(t)
+        return fe
 
 def list_fixed_expenses() -> List[FixedExpense]:
     with Session(engine) as session:
         return session.exec(select(FixedExpense)).all()
+
+def get_fixed_expense(fe_id: int) -> Optional[FixedExpense]:
+    with Session(engine) as session:
+        return session.get(FixedExpense, fe_id)
 
 
 def _iter_months(start: date, end: date):
@@ -327,3 +499,140 @@ def get_categories() -> Dict[str, List[str]]:
         "majors": sorted(list(majors)),
         "subs": {k: sorted(list(v)) for k, v in subs_map.items()}
     }
+
+
+# --- Savings (Saving) helpers ---
+def create_saving(data: Dict[str, Any]) -> Saving:
+    """
+    Create a saving entry. Fields:
+    - kind (required), contribution_amount (per period), initial_balance (optional),
+      start_date/end_date (optional), day_of_month (optional), withdrawn (optional)
+    """
+    if "kind" not in data or data["kind"] in (None, ""):
+        raise ValueError("Missing required field: kind")
+    # coerce dates and numbers
+    try:
+        start = _coerce_date(data.get("start_date"), "start_date")
+        end = _coerce_date(data.get("end_date"), "end_date")
+    except ValueError:
+        raise
+    try:
+        init_bal = float(data.get("initial_balance", 0.0))
+    except Exception:
+        raise ValueError(f"Invalid initial_balance: {data.get('initial_balance')}")
+    try:
+        contrib = float(data.get("contribution_amount", 0.0))
+    except Exception:
+        raise ValueError(f"Invalid contribution_amount: {data.get('contribution_amount')}")
+    dom = data.get("day_of_month")
+    if dom is not None and dom != "":
+        try:
+            dom = int(dom)
+        except Exception:
+            raise ValueError(f"Invalid day_of_month: {dom}")
+
+    s = Saving(
+        name=data.get("name"),
+        kind=data["kind"],
+        initial_balance=init_bal,
+        contribution_amount=contrib,
+        start_date=start,
+        end_date=end,
+        day_of_month=dom,
+        frequency=data.get("frequency", "monthly"),
+        withdrawn=bool(data.get("withdrawn", False)),
+        active=bool(data.get("active", True))
+    )
+    with Session(engine) as session:
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+    return s
+
+def list_savings() -> List[Saving]:
+    with Session(engine) as session:
+        return session.exec(select(Saving)).all()
+
+def get_saving(sid: int) -> Optional[Saving]:
+    with Session(engine) as session:
+        return session.get(Saving, sid)
+
+def update_saving(sid: int, patch: Dict[str, Any]) -> Optional[Saving]:
+    with Session(engine) as session:
+        s = session.get(Saving, sid)
+        if not s:
+            return None
+        for k, v in patch.items():
+            if not hasattr(s, k):
+                continue
+            if k in ("start_date", "end_date"):
+                v = _coerce_date(v, k)
+            if k in ("initial_balance", "contribution_amount"):
+                try:
+                    v = float(v)
+                except Exception:
+                    raise ValueError(f"Invalid numeric value for {k}: {patch.get(k)}")
+            if k == "day_of_month" and v is not None and v != "":
+                try:
+                    v = int(v)
+                except Exception:
+                    raise ValueError(f"Invalid day_of_month: {patch.get('day_of_month')}")
+            setattr(s, k, v)
+        session.add(s)
+        session.commit()
+        session.refresh(s)
+        return s
+
+def delete_saving(sid: int) -> bool:
+    with Session(engine) as session:
+        s = session.get(Saving, sid)
+        if not s:
+            return False
+        session.delete(s)
+        session.commit()
+        return True
+
+def forecast_savings(on_date: date) -> Dict[str, Any]:
+    """
+    For each active, not-withdrawn saving, compute predicted balance up to 'on_date':
+    balance = initial_balance + sum(contributions on each scheduled date <= on_date)
+    Only supports monthly frequency (frequency == 'monthly') and day_of_month scheduling.
+    Returns { "date": ISO, "total": x, "items": [ {saving fields..., predicted_balance} ] }
+    """
+    with Session(engine) as session:
+        savings = session.exec(select(Saving).where(Saving.active == True)).all()
+
+    total = 0.0
+    items = []
+    for s in savings:
+        if s.withdrawn:
+            predicted = 0.0
+        else:
+            predicted = float(s.initial_balance or 0.0)
+            # contributions
+            if s.contribution_amount and s.start_date:
+                # contribution dates from start_date until min(end_date or on_date, on_date)
+                contrib_end = min(s.end_date, on_date) if s.end_date else on_date
+                if contrib_end >= s.start_date:
+                    # iterate months
+                    for y, m in _iter_months(s.start_date, contrib_end):
+                        if s.frequency != "monthly":
+                            continue  # only monthly supported for now
+                        last_day = calendar.monthrange(y, m)[1]
+                        if s.day_of_month:
+                            day = min(s.day_of_month, last_day)
+                        else:
+                            day = min(s.start_date.day, last_day)
+                        occ = date(y, m, day)
+                        if occ <= on_date and occ >= s.start_date and (not s.end_date or occ <= s.end_date):
+                            predicted += float(s.contribution_amount)
+        total += predicted
+        items.append({
+            "id": s.id,
+            "name": s.name,
+            "kind": s.kind,
+            "predicted_balance": predicted,
+            "initial_balance": s.initial_balance,
+            "contribution_amount": s.contribution_amount,
+        })
+    return {"date": on_date.isoformat(), "total": total, "items": items}

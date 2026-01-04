@@ -3,6 +3,8 @@ import SummaryView from "./components/SummaryView";
 import TransactionForm from "./components/TransactionForm";
 import CalendarView from "./components/CalendarView";
 import DailyView from "./components/DailyView";
+import FixedExpensesView from "./components/FixedExpensesView";
+import SavingsView from "./components/SavingsView";
 import { Transaction } from "./types";
 
 export default function App(): JSX.Element {
@@ -10,8 +12,8 @@ export default function App(): JSX.Element {
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  // UI tabs
-  const [tab, setTab] = useState<"summary" | "entries" | "calendar" | "daily">("summary");
+  // UI tabs: added fixed / savings
+  const [tab, setTab] = useState<"summary" | "entries" | "calendar" | "daily" | "fixed" | "savings">("summary");
 
   // date filter
   const [startDate, setStartDate] = useState<string>("");
@@ -186,6 +188,8 @@ export default function App(): JSX.Element {
         <button onClick={() => setTab("entries")} className={tab === "entries" ? "active" : ""}>Entries</button>
         <button onClick={() => setTab("calendar")} className={tab === "calendar" ? "active" : ""}>Calendar</button>
         <button onClick={() => setTab("daily")} className={tab === "daily" ? "active" : ""}>Daily</button>
+        <button onClick={() => setTab("fixed")} className={tab === "fixed" ? "active" : ""}>Fixed Expenses</button>
+        <button onClick={() => setTab("savings")} className={tab === "savings" ? "active" : ""}>Savings</button>
       </nav>
 
       <section style={{ margin: "12px 0" }}>
@@ -205,6 +209,8 @@ export default function App(): JSX.Element {
         {tab === "entries" && <TransactionForm onSaveBatch={handleAddTransactions} />}
         {tab === "calendar" && <CalendarView transactions={filteredTransactions} />}
         {tab === "daily" && <DailyView transactions={filteredTransactions} onDelete={handleDeleteTransaction} />}
+        {tab === "fixed" && <FixedExpensesView />}
+        {tab === "savings" && <SavingsView />}
       </main>
     </div>
   );

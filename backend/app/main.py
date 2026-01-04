@@ -4,7 +4,7 @@ from sqlmodel import Session
 from datetime import datetime, date
 from typing import Optional, List
 from .models import create_db_and_tables
-from .crud import get_session, create_transactions_bulk, list_transactions, get_summary, create_fixed_expense, list_fixed_expenses, query_transactions, get_transaction, get_categories, get_transactions, update_transaction, delete_transaction
+from .crud import get_session, create_transactions_bulk, list_transactions, get_summary, create_fixed_expense, list_fixed_expenses, query_transactions, get_transaction, get_categories, get_transactions, update_transaction, delete_transaction, get_fixed_expense, update_fixed_expense, delete_fixed_expense, create_saving, list_savings, get_saving, update_saving, delete_saving, forecast_savings
 import logging
 import csv
 
@@ -243,4 +243,129 @@ def api_categories():
 def health():
     return {"status": "ok"}
 
-# CSV upload / file-reading endpoints removed. Data ingestion should go through /api/transactions (POST) or DB migrations/import tools.
+# --- Fixed expenses endpoints ---
+@app.get("/api/fixed_expenses")
+def api_fixed_expenses():
+    try:
+        fes = list_fixed_expenses()
+        out = []
+        for fe in fes:
+            out.append({
+                "id": fe.id,
+                "major_category": fe.major_category,
+                "sub_category": fe.sub_category,
+                "description": fe.description,
+                "amount": fe.amount,
+                "start_date": fe.start_date.isoformat() if fe.start_date else None,
+                "end_date": fe.end_date.isoformat() if fe.end_date else None,
+                "day_of_month": fe.day_of_month,
+                "active": fe.active
+            })
+        return out
+    except Exception:
+        logging.exception("list_fixed_expenses failed")
+        raise HTTPException(status_code=500, detail="fixed_expenses error")
+
+@app.post("/api/fixed_expenses", status_code=201)
+def api_fixed_expense_create(payload: dict):
+    try:
+        fe = create_fixed_expense(payload)
+        return {"id": fe.id}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception:
+        logging.exception("create_fixed_expense failed")
+        raise HTTPException(status_code=500, detail="create failed")
+
+@app.put("/api/fixed_expenses/{fe_id}")
+@app.patch("/api/fixed_expenses/{fe_id}")
+def api_fixed_expense_update(fe_id: int, payload: dict):
+    try:
+        fe = update_fixed_expense(fe_id, payload)
+        if not fe:
+            raise HTTPException(status_code=404, detail="not found")
+        return {"ok": True}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception:
+        logging.exception("update_fixed_expense failed")
+        raise HTTPException(status_code=500, detail="update failed")
+
+@app.delete("/api/fixed_expenses/{fe_id}", status_code=204)
+def api_fixed_expense_delete(fe_id: int):
+    ok = delete_fixed_expense(fe_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return PlainTextResponse(status_code=204, content="")
+
+# --- Savings endpoints ---
+@app.get("/api/savings")
+def api_savings_list():
+    try:
+        s = list_savings()
+        out = []
+        for it in s:
+            out.append({
+                "id": it.id,
+                "name": it.name,
+                "kind": it.kind,
+                "initial_balance": it.initial_balance,
+                "contribution_amount": it.contribution_amount,
+                "start_date": it.start_date.isoformat() if it.start_date else None,
+                "end_date": it.end_date.isoformat() if it.end_date else None,
+                "day_of_month": it.day_of_month,
+                "frequency": it.frequency,
+                "withdrawn": it.withdrawn,
+                "active": it.active
+            })
+        return out
+    except Exception:
+        logging.exception("list_savings failed")
+        raise HTTPException(status_code=500, detail="savings error")
+
+@app.post("/api/savings", status_code=201)
+def api_saving_create(payload: dict):
+    try:
+        s = create_saving(payload)
+        return {"id": s.id}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception:
+        logging.exception("create_saving failed")
+        raise HTTPException(status_code=500, detail="create failed")
+
+@app.put("/api/savings/{sid}")
+@app.patch("/api/savings/{sid}")
+def api_saving_update(sid: int, payload: dict):
+    try:
+        s = update_saving(sid, payload)
+        if not s:
+            raise HTTPException(status_code=404, detail="not found")
+        return {"ok": True}
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+    except Exception:
+        logging.exception("update_saving failed")
+        raise HTTPException(status_code=500, detail="update failed")
+
+@app.delete("/api/savings/{sid}", status_code=204)
+def api_saving_delete(sid: int):
+    ok = delete_saving(sid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="not found")
+    return PlainTextResponse(status_code=204, content="")
+
+@app.get("/api/savings/forecast")
+def api_savings_forecast(date: Optional[str] = Query(None)):
+    if not date:
+        raise HTTPException(status_code=400, detail="date query required YYYY-MM-DD")
+    try:
+        on = datetime.strptime(date, "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid date format. Expected YYYY-MM-DD")
+    try:
+        res = forecast_savings(on)
+        return res
+    except Exception:
+        logging.exception("forecast_savings failed")
+        raise HTTPException(status_code=500, detail="forecast error")
