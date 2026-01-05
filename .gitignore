@@ -45,3 +45,6 @@ Thumbs.db
 
 # Misc
 *.sqlite3
+
+# Own app.db
+backend/data/app.db
