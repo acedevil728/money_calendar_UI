@@ -11,7 +11,13 @@ import { Transaction } from "./types";
 export default function App(): JSX.Element {
   // state
   const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [loadingTransactions, setLoadingTransactions] = useState(false);
+  const [txOffset, setTxOffset] = useState(0);
+  const [txPageSize, setTxPageSize] = useState(500); // adjustable page size for large datasets
+  const [canLoadMore, setCanLoadMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const MAX_RETRIES = 2;
+  const FETCH_TIMEOUT_MS = 10_000;
 
   // UI tabs: added fixed / savings / settings
   const [tab, setTab] = useState<"summary" | "entries" | "calendar" | "daily" | "fixed" | "savings" | "settings">("summary");
@@ -31,8 +37,33 @@ export default function App(): JSX.Element {
     };
   };
   const monthRange = makeMonthRange();
+  // default to current month range (show this month's transactions by default)
   const [startDate, setStartDate] = useState<string>(monthRange.start);
   const [endDate, setEndDate] = useState<string>(monthRange.end);
+  // enforce max 1 year window (end <= start + 1 year - 1 day)
+  useEffect(() => {
+    if (!startDate || !endDate) return;
+    try {
+      const s = new Date(startDate + "T00:00:00");
+      const e = new Date(endDate + "T00:00:00");
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) return;
+      // if start after end, keep end equal to start
+      if (s > e) {
+        setEndDate(startDate);
+        return;
+      }
+      const limit = new Date(s);
+      limit.setFullYear(limit.getFullYear() + 1);
+      limit.setDate(limit.getDate() - 1); // inclusive 1 year window
+      if (e > limit) {
+        const limStr = makeYMD(limit.getFullYear(), limit.getMonth(), limit.getDate());
+        setEndDate(limStr);
+        setError("최대 1년까지만 조회할 수 있습니다. 기간을 조정했습니다.");
+      }
+    } catch {
+      // ignore parse errors
+    }
+  }, [startDate, endDate]);
 
   // majors/subs settings (loaded from backend)
   const [majors, setMajors] = useState<string[]>([]);
@@ -78,21 +109,65 @@ export default function App(): JSX.Element {
     }));
   };
 
-  useEffect(() => {
-    fetch("/api/transactions")
-      .then((r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      })
-      .then((data) => {
-        const normalized = normalizeApiData(data);
+  // resilient fetch with timeout and retries
+  async function fetchWithTimeout(url: string, opts: RequestInit = {}, timeout = FETCH_TIMEOUT_MS) {
+    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeout);
+      try {
+        const res = await fetch(url, { ...opts, signal: controller.signal });
+        clearTimeout(id);
+        return res;
+      } catch (err) {
+        clearTimeout(id);
+        if (attempt === MAX_RETRIES) throw err;
+        // small backoff before retry
+        await new Promise((r) => setTimeout(r, 300 * (attempt + 1)));
+      }
+    }
+    throw new Error("unreachable");
+  }
+
+  // load transactions with pagination (limit/offset). When many rows exist, use "Load more".
+  async function loadTransactions({ reset = false } = {}) {
+    if (loadingTransactions) return;
+    setLoadingTransactions(true);
+    setError(null);
+    try {
+      const offset = reset ? 0 : txOffset;
+      // include date filter so backend returns relevant page of data
+      const params = new URLSearchParams();
+      params.set("limit", String(txPageSize));
+      params.set("offset", String(offset));
+      if (startDate) params.set("start", startDate);
+      if (endDate) params.set("end", endDate);
+      const url = `/api/transactions?${params.toString()}`;
+      const r = await fetchWithTimeout(url);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const normalized = normalizeApiData(data);
+      if (reset) {
         setTransactions(normalized);
-      })
-      .catch(() => {
-        setTransactions([]);
-        setError("Could not fetch /api/transactions — ensure backend is running.");
-      });
-  }, []);
+      } else {
+        setTransactions((prev) => [...prev, ...normalized]);
+      }
+      // if fewer than pageSize returned, no more pages available
+      setCanLoadMore(normalized.length >= txPageSize);
+      setTxOffset(reset ? normalized.length : txOffset + normalized.length);
+    } catch (e) {
+      // keep existing transactions but show error hint
+      setError("Could not fetch /api/transactions (timeout or server busy). Try smaller page size or reload.");
+    } finally {
+      setLoadingTransactions(false);
+    }
+  }
+
+  // initial load and reload when page size or date filters change
+  useEffect(() => {
+    setTxOffset(0);
+    loadTransactions({ reset: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [txPageSize, startDate, endDate]);
 
   // helper to extract YYYY-MM-DD from transaction safely
   function txYmd(t: Transaction) {
@@ -188,10 +263,8 @@ export default function App(): JSX.Element {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newTxs),
       });
-      const res = await fetch("/api/transactions");
-      if (!res.ok) throw new Error("fetch after POST failed");
-      const data = await res.json();
-      setTransactions(normalizeApiData(data));
+      // after creating, reload from server using current pagination reset
+      await loadTransactions({ reset: true });
     } catch {
       // optimistic local add as fallback: map types to Korean for display
       setTransactions((prev) => [
@@ -278,6 +351,21 @@ export default function App(): JSX.Element {
         <button style={{ marginLeft: 12 }} onClick={() => { setStartDate(""); setEndDate(""); }}>Clear</button>
         <button style={{ marginLeft: 12 }} onClick={exportSummaryCsv}>Export Summary CSV</button>
         <button style={{ marginLeft: 12 }} onClick={exportDailyCsv}>Export Daily CSV</button>
+
+        {/* Pagination controls for large datasets */}
+        <div style={{ display: "inline-block", marginLeft: 16 }}>
+          <label>Page size:</label>
+          <select value={txPageSize} onChange={(e) => { setTxPageSize(Number(e.target.value)); setTxOffset(0); }}>
+            <option value={100}>100</option>
+            <option value={250}>250</option>
+            <option value={500}>500</option>
+            <option value={1000}>1000</option>
+          </select>
+          <button style={{ marginLeft: 8 }} onClick={() => loadTransactions({ reset: true })} disabled={loadingTransactions}>Reload</button>
+          <button style={{ marginLeft: 8 }} onClick={() => loadTransactions()} disabled={!canLoadMore || loadingTransactions}>
+            {loadingTransactions ? "Loading..." : canLoadMore ? "Load more" : "No more"}
+          </button>
+        </div>
       </section>
 
       {error && <div style={{ color: "crimson", marginTop: 8 }}>{error}</div>}
@@ -285,7 +373,7 @@ export default function App(): JSX.Element {
       <main>
         {tab === "summary" && <SummaryView transactions={filteredTransactions} />}
         {tab === "entries" && <TransactionForm onSaveBatch={handleAddTransactions} majors={majors} subs={subs} />}
-        {tab === "calendar" && <CalendarView transactions={filteredTransactions} />}
+        {tab === "calendar" && <CalendarView transactions={filteredTransactions} start={startDate} end={endDate} />}
         {tab === "daily" && <DailyView transactions={filteredTransactions} onDelete={handleDeleteTransaction} />}
         {tab === "fixed" && <FixedExpensesView majors={majors} subs={subs} />}
         {tab === "savings" && <SavingsView />}

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from "react";
+import React, { useMemo, useState, useEffect } from "react";
 import { Transaction, fmtCurrency } from "../types";
 
 function sumList(list: Transaction[]) {
@@ -13,11 +13,57 @@ function sumList(list: Transaction[]) {
   );
 }
 
-export default function CalendarView({ transactions }: { transactions: Transaction[] }) {
-  const [monthOffset, setMonthOffset] = useState(0);
+export default function CalendarView({
+  transactions,
+  start,
+  end,
+}: {
+  transactions: Transaction[];
+  start?: string;
+  end?: string;
+}) {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
-  const today = new Date();
-  const base = new Date(today.getFullYear(), today.getMonth() + monthOffset, 1);
+  // build list of months to show based on start/end (inclusive). If no filter provided, show current month.
+  const months = useMemo(() => {
+    const mk = (y: number, m: number) => ({ year: y, month: m });
+    if (start && end) {
+      const s = new Date(start + "T00:00:00");
+      const e = new Date(end + "T00:00:00");
+      if (isNaN(s.getTime()) || isNaN(e.getTime())) return [mk(new Date().getFullYear(), new Date().getMonth())];
+      const list = [];
+      let y = s.getFullYear();
+      let m = s.getMonth();
+      while (y < e.getFullYear() || (y === e.getFullYear() && m <= e.getMonth())) {
+        list.push(mk(y, m));
+        m++;
+        if (m > 11) { m = 0; y++; }
+      }
+      return list.length ? list : [mk(new Date().getFullYear(), new Date().getMonth())];
+    } else {
+      const now = new Date();
+      return [mk(now.getFullYear(), now.getMonth())];
+    }
+  }, [start, end]);
+
+  // current displayed month index within months[]
+  const [currentIdx, setCurrentIdx] = useState(0);
+  useEffect(() => {
+    // default to the month that contains today if present, else 0
+    const now = new Date();
+    const found = months.findIndex((mm) => mm.year === now.getFullYear() && mm.month === now.getMonth());
+    setCurrentIdx(found >= 0 ? found : 0);
+    // clear selectedDate if outside new months range
+    setSelectedDate((sd) => {
+      if (!sd) return sd;
+      const sdate = sd.slice(0, 10);
+      const y = Number(sdate.slice(0, 4));
+      const mo = Number(sdate.slice(5, 7)) - 1;
+      const inRange = months.some((mm) => mm.year === y && mm.month === mo);
+      return inRange ? sd : null;
+    });
+  }, [months]);
+
+  const base = new Date(months[currentIdx].year, months[currentIdx].month, 1);
 
   // helper to build YYYY-MM-DD without using toISOString (avoids timezone shifts)
   function pad(n: number) {
@@ -71,9 +117,12 @@ export default function CalendarView({ transactions }: { transactions: Transacti
     <section className="calendar-section">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <div>
-          <button onClick={() => setMonthOffset((m) => m - 1)}>◀</button>
-          <button onClick={() => setMonthOffset(0)} style={{ margin: "0 8px" }}>Today</button>
-          <button onClick={() => setMonthOffset((m) => m + 1)}>▶</button>
+          <button onClick={() => setCurrentIdx((i) => Math.max(0, i - 1))} disabled={currentIdx <= 0}>◀</button>
+          <button onClick={() => {
+            const nowIdx = months.findIndex((mm) => mm.year === new Date().getFullYear() && mm.month === new Date().getMonth());
+            setCurrentIdx(nowIdx >= 0 ? nowIdx : 0);
+          }} style={{ margin: "0 8px" }}>Today</button>
+          <button onClick={() => setCurrentIdx((i) => Math.min(months.length - 1, i + 1))} disabled={currentIdx >= months.length - 1}>▶</button>
         </div>
         <strong>{base.toLocaleString(undefined, { year: "numeric", month: "long" })}</strong>
       </div>

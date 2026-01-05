@@ -98,6 +98,30 @@ def _ensure_columns(engine, table: str, cols: dict) -> None:
                     logging.exception("Failed to add column %s to %s", col, table)
                     # continue attempting others
 
+# new helper: ensure indexes exist (development convenience)
+def _ensure_indexes(engine) -> None:
+    """
+    Create indexes only on columns that actually exist in the DB.
+    - If 'direction' exists use it; otherwise if 'type' exists use that.
+    - Create indexes for date and major_category only if those columns exist.
+    """
+    with engine.begin() as conn:
+        try:
+            # get existing columns
+            res = conn.exec_driver_sql("PRAGMA table_info('transaction')").fetchall()
+            existing_cols = [r[1] for r in res]
+
+            if "date" in existing_cols:
+                conn.exec_driver_sql('CREATE INDEX IF NOT EXISTS idx_transaction_date ON "transaction" (date)')
+            # direction or legacy 'type'
+            col_for_direction = "direction" if "direction" in existing_cols else ("type" if "type" in existing_cols else None)
+            if col_for_direction:
+                conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS idx_transaction_direction ON "transaction" ("{col_for_direction}")')
+            if "major_category" in existing_cols:
+                conn.exec_driver_sql('CREATE INDEX IF NOT EXISTS idx_transaction_major ON "transaction" (major_category)')
+        except Exception:
+            logging.exception("Failed to ensure indexes")
+
 def create_db_and_tables() -> None:
     """Ensure data directory exists and create DB tables."""
     _ensure_data_dir(DATA_DIR)
@@ -117,5 +141,11 @@ def create_db_and_tables() -> None:
     try:
         _ensure_columns(engine, "transaction", expected_tx_cols)
     except Exception:
-        # startup tolerant: log and continue
+        # startup tolerant: 실패시 로깅만 하고 계속 진행
         logging.exception("create_db_and_tables: _ensure_columns failed")
+
+    # ensure helpful indexes to speed up date/direction/major_category queries
+    try:
+        _ensure_indexes(engine)
+    except Exception:
+        logging.exception("create_db_and_tables: _ensure_indexes failed")

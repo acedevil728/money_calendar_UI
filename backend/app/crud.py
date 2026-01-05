@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import date, datetime
 import calendar
 import logging
+from sqlalchemy import func
 
 def get_session():
     with Session(engine) as session:
@@ -383,14 +384,34 @@ def _compute_default_range(all_tx: List[Transaction]) -> Tuple[date, date]:
 def get_summary(start: Optional[date] = None, end: Optional[date] = None) -> Dict[str, Any]:
     """
     Return summary: total amount and totals by major -> sub categories.
-    If start/end provided, include transactions and generated fixed expenses occurrences within that range.
+      Optimized: avoid loading entire table. If start/end missing, query min/max(date) from DB.
     """
+    # determine default range using DB min/max if needed
     with Session(engine) as session:
-        all_tx = session.exec(select(Transaction)).all()
-        fixed_list = session.exec(select(FixedExpense).where(FixedExpense.active == True)).all()
+        # result shape may vary by SQLAlchemy version (Row/tuple); handle safely
+        minmax_res = session.exec(select(func.min(Transaction.date), func.max(Transaction.date)))
+        min_max = minmax_res.first()
+        if not min_max:
+            db_min, db_max = None, None
+        else:
+            # min_max might be an int/str/date tuple-like or a scalar-like value
+            if isinstance(min_max, (list, tuple)):
+                db_min, db_max = min_max[0], min_max[1]
+            else:
+                # single scalar (rare for two-col select) — try indexing, otherwise set to None
+                try:
+                    db_min, db_max = min_max[0], min_max[1]
+                except Exception:
+                    db_min, db_max = None, None
 
     if start is None or end is None:
-        default_start, default_end = _compute_default_range(all_tx)
+        if db_min is not None and db_max is not None:
+            default_start, default_end = db_min, db_max
+        else:
+            today = date.today()
+            default_start = date(today.year, today.month, 1)
+            last_day = calendar.monthrange(today.year, today.month)[1]
+            default_end = date(today.year, today.month, last_day)
         if start is None:
             start = default_start
         if end is None:
@@ -401,20 +422,25 @@ def get_summary(start: Optional[date] = None, end: Optional[date] = None) -> Dic
     major_sub_acc: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
     total = 0.0
 
-    # include transactions
-    for t in all_tx:
+    # load only transactions within [start, end] (reduces memory for large DB)
+    with Session(engine) as session:
+        stmt = select(Transaction).where(Transaction.date >= start).where(Transaction.date <= end)
+        txs = session.exec(stmt).all()
+
+    for t in txs:
         if t.date is None:
             continue
-        if t.date < start or t.date > end:
-            continue
-        amt = float(t.amount)
+        amt = float(t.amount or 0)
         total += amt
         major = t.major_category or t.category or "uncategorized"
         sub = t.sub_category or "unspecified"
         major_acc[major] += amt
         major_sub_acc[major][sub] += amt
 
-    # include fixed expenses occurrences
+    # include fixed expenses occurrences (same as before)
+    with Session(engine) as session:
+        fixed_list = session.exec(select(FixedExpense).where(FixedExpense.active == True)).all()
+
     for fe in fixed_list:
         fe_start = fe.start_date or start
         fe_end = fe.end_date or end
@@ -452,7 +478,7 @@ def query_transactions(start: Optional[date] = None,
     """
     Return (items, total_count) filtered by optional start/end (inclusive),
     tx_type (substring match), search (searches major/sub/description/category),
-    with simple pagination (1-based page).
+    with DB-side pagination (LIMIT/OFFSET) and efficient count.
     """
     with Session(engine) as session:
         stmt = select(Transaction)
@@ -470,15 +496,44 @@ def query_transactions(start: Optional[date] = None,
                 (Transaction.description.ilike(q)) |
                 (Transaction.category.ilike(q))
             )
-        # order most recent first
+
+        # compute total count efficiently (remove ordering)
+        count_subq = stmt.order_by(None).subquery()
+        # execute count; result shape may be int or a row/tuple depending on SQLAlchemy
+        count_exec = session.exec(select(func.count()).select_from(count_subq))
+        count_val = None
+        try:
+            # prefer .one() if available
+            count_val = count_exec.one()
+        except Exception:
+            try:
+                count_val = count_exec.first()
+            except Exception:
+                count_val = None
+
+        if count_val is None:
+            total = 0
+        elif isinstance(count_val, int):
+            total = int(count_val)
+        elif isinstance(count_val, (list, tuple)):
+            total = int(count_val[0] or 0)
+        else:
+            # Row-like object: try indexing or mapping
+            try:
+                total = int(count_val[0])
+            except Exception:
+                try:
+                    # Row._mapping -> dict-like
+                    total = int(next(iter(count_val)) or 0)
+                except Exception:
+                    total = 0
+
+        # apply ordering + limit/offset for page
         stmt = stmt.order_by(Transaction.date.desc())
-        all_items = session.exec(stmt).all()
-        total = len(all_items)
-        # simple pagination in-memory (sufficient for dev)
-        start_idx = max((page - 1) * per_page, 0)
-        end_idx = start_idx + per_page
-        page_items = all_items[start_idx:end_idx]
-        return page_items, total
+        offset = max((page - 1) * per_page, 0)
+        stmt = stmt.offset(offset).limit(per_page)
+        page_items = session.exec(stmt).all()
+        return page_items, int(total)
 
 def get_categories() -> Dict[str, List[str]]:
     """

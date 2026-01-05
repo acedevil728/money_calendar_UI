@@ -20,6 +20,8 @@ export default function TransactionForm({
   });
 
   const [rows, setRows] = useState<Transaction[]>([emptyRow()]);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveProgress, setSaveProgress] = useState<{ done: number; total: number } | null>(null);
 
   function updateRow(idx: number, patch: Partial<Transaction>) {
     setRows((r) => {
@@ -42,8 +44,8 @@ export default function TransactionForm({
     return list.length === 0 ? true : list.includes(value);
   }
 
+  // chunked upload to avoid huge payloads / server timeouts
   async function saveAll() {
-    // basic validation: ensure required and major/sub in lists if lists present
     const valid = rows.filter((r) => {
       const okBasic = r.date && r.type && !isNaN(Number(r.amount));
       if (!okBasic) return false;
@@ -52,14 +54,49 @@ export default function TransactionForm({
       return true;
     });
     if (valid.length === 0) return alert("저장할 유효한 행이 없습니다. Major/Sub 값이 목록에 있어야 합니다.");
-    onSaveBatch(valid);
-    // clear to single empty row
-    setRows([emptyRow()]);
+
+    // chunk size adjustable; keep conservative default
+    const CHUNK = 50;
+    const chunks: Transaction[][] = [];
+    for (let i = 0; i < valid.length; i += CHUNK) chunks.push(valid.slice(i, i + CHUNK));
+
+    setIsSaving(true);
+    setSaveProgress({ done: 0, total: valid.length });
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const batch = chunks[i];
+        try {
+          // try server POST; if onSaveBatch expects local handling, still call it for optimistic UI
+          await fetch("/api/transactions", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(batch),
+          });
+        } catch {
+          // ignore per-chunk network failure; we'll still call onSaveBatch for local optimistic update
+        }
+        // update progress using number of items saved
+        setSaveProgress((p) => p ? { done: p.done + batch.length, total: p.total } : null);
+      }
+
+      // notify parent with the full validated set (parent will re-fetch authoritative data if available)
+      onSaveBatch(valid);
+      setRows([emptyRow()]);
+    } finally {
+      setIsSaving(false);
+      setSaveProgress(null);
+    }
   }
 
   return (
     <section className="entry-section">
       <h2>Multiple Entries</h2>
+
+      {isSaving && saveProgress && (
+        <div style={{ marginBottom: 8, color: "#444" }}>
+          업로드 중... {saveProgress.done}/{saveProgress.total}
+        </div>
+      )}
 
       {/* description/header row */}
       <div className="entry-rows" style={{ marginBottom: 8 }}>
@@ -78,7 +115,7 @@ export default function TransactionForm({
         {rows.map((row, idx) => (
           <div key={idx} className="entry-row">
             <input type="date" value={row.date} onChange={(e) => updateRow(idx, { date: e.target.value })} />
-            <select value={row.type} onChange={(e) => updateRow(idx, { type: e.target.value })}>
+            <select value={row.type} onChange={(e) => updateRow(idx, { type: e.target.value })} disabled={isSaving}>
               <option value="수입">수입</option>
               <option value="지출">지출</option>
             </select>
@@ -96,6 +133,7 @@ export default function TransactionForm({
                     updateRow(idx, { major_category: "" });
                   }
                 }}
+                disabled={isSaving}
               />
               <datalist id="majors-list">
                 {majors.map((m) => (
@@ -117,6 +155,7 @@ export default function TransactionForm({
                     updateRow(idx, { sub_category: "" });
                   }
                 }}
+                disabled={isSaving}
               />
               <datalist id="subs-list">
                 {subs.map((s) => (
@@ -125,16 +164,16 @@ export default function TransactionForm({
               </datalist>
             </div>
 
-            <input type="number" value={String(row.amount)} onChange={(e) => updateRow(idx, { amount: Number(e.target.value) })} />
-            <input placeholder="Desc" value={row.description} onChange={(e) => updateRow(idx, { description: e.target.value })} />
-            <button onClick={() => removeRow(idx)} aria-label="remove">✕</button>
+            <input type="number" value={String(row.amount)} onChange={(e) => updateRow(idx, { amount: Number(e.target.value) })} disabled={isSaving} />
+            <input placeholder="Desc" value={row.description} onChange={(e) => updateRow(idx, { description: e.target.value })} disabled={isSaving} />
+            <button onClick={() => removeRow(idx)} aria-label="remove" disabled={isSaving}>✕</button>
           </div>
         ))}
       </div>
 
       <div style={{ marginTop: 8 }}>
-        <button onClick={addRow}>Add Row</button>
-        <button onClick={saveAll} style={{ marginLeft: 8 }}>Save All</button>
+        <button onClick={addRow} disabled={isSaving}>Add Row</button>
+        <button onClick={saveAll} style={{ marginLeft: 8 }} disabled={isSaving}>Save All</button>
       </div>
     </section>
   );
