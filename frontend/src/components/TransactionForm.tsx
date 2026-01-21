@@ -6,7 +6,8 @@ export default function TransactionForm({
   majors = [],
   subs = [],
 }: {
-  onSaveBatch: (txs: Transaction[]) => void;
+  // onSaveBatch may be async; await per-chunk to avoid duplicate POSTs
+  onSaveBatch: (txs: Transaction[]) => Promise<void> | void;
   majors?: string[];
   subs?: string[];
 }) {
@@ -63,24 +64,18 @@ export default function TransactionForm({
     setIsSaving(true);
     setSaveProgress({ done: 0, total: valid.length });
     try {
+      // Call parent's handler per-chunk and await it — avoid posting twice
       for (let i = 0; i < chunks.length; i++) {
         const batch = chunks[i];
         try {
-          // try server POST; if onSaveBatch expects local handling, still call it for optimistic UI
-          await fetch("/api/transactions", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(batch),
-          });
+          await onSaveBatch(batch);
         } catch {
-          // ignore per-chunk network failure; we'll still call onSaveBatch for local optimistic update
+          // swallow errors per-chunk; progress still updated (parent may fallback to optimistic UI)
         }
-        // update progress using number of items saved
         setSaveProgress((p) => p ? { done: p.done + batch.length, total: p.total } : null);
       }
 
-      // notify parent with the full validated set (parent will re-fetch authoritative data if available)
-      onSaveBatch(valid);
+      // clear form after successful/attempted upload
       setRows([emptyRow()]);
     } finally {
       setIsSaving(false);
