@@ -1,150 +1,33 @@
-from sqlmodel import SQLModel, Field, create_engine
-from typing import Optional
-from datetime import date
-import os
-from sqlalchemy import Column, String
-import logging
+"""
+Compatibility exports for legacy imports.
 
-# data directory and DB file
-DATA_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "data"))
-DB_FILE = os.path.join(DATA_DIR, "app.db")
-DATABASE_URL = f"sqlite:///{DB_FILE}"
+Source of truth for models/engine is app.models_core.
+"""
 
-# create_engine with check_same_thread False for SQLite in dev container
-engine = create_engine(DATABASE_URL, echo=False, connect_args={"check_same_thread": False})
+from .models_core import (
+    DATA_DIR,
+    DB_FILE,
+    DATABASE_URL,
+    engine,
+    TransactionBase,
+    Transaction,
+    FixedExpense,
+    Saving,
+    CategoryMajor,
+    CategorySub,
+    create_db_and_tables,
+)
 
-
-class TransactionBase(SQLModel):
-    date: date
-    amount: float
-    # 대분류 / 중분류
-    major_category: Optional[str] = None
-    sub_category: Optional[str] = None
-    category: Optional[str] = None  # legacy mapping
-    description: Optional[str] = None  # 상세 내역
-    account: Optional[str] = None
-    remarks: Optional[str] = None
-    raw_source: Optional[str] = None
-
-
-class Transaction(TransactionBase, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-
-    # Persisted column: attribute 'direction' maps to DB column named "type"
-    direction: Optional[str] = Field(default=None, sa_column=Column("type", String, nullable=True))
-
-    # python-level alias so existing code referencing .type still works
-    @property
-    def type(self) -> Optional[str]:
-        return self.direction
-
-    @type.setter
-    def type(self, value: Optional[str]) -> None:
-        self.direction = value
-
-
-class FixedExpense(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    amount: float
-    major_category: Optional[str] = None
-    sub_category: Optional[str] = None
-    description: Optional[str] = None
-    remarks: Optional[str] = None
-    # day of month when this fixed expense occurs (1-31). If day > days in month, use last day.
-    day_of_month: int = 1
-    # optional active period
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    active: bool = True
-
-
-class Saving(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: Optional[str] = None
-    kind: str
-    initial_balance: float = 0.0
-    contribution_amount: float = 0.0
-    start_date: Optional[date] = None
-    end_date: Optional[date] = None
-    day_of_month: Optional[int] = None
-    frequency: Optional[str] = "monthly"
-    withdrawn: bool = False
-    active: bool = True
-
-
-class CategoryMajor(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str
-
-
-class CategorySub(SQLModel, table=True):
-    id: Optional[int] = Field(default=None, primary_key=True)
-    name: str
-
-
-def _ensure_data_dir(path: str) -> None:
-    os.makedirs(path, exist_ok=True)
-
-def _ensure_columns(engine, table: str, cols: dict) -> None:
-    from sqlalchemy import text
-    with engine.begin() as conn:
-        res = conn.exec_driver_sql(f"PRAGMA table_info('{table}')").fetchall()
-        existing = [r[1] for r in res]
-        for col, col_type in cols.items():
-            if col not in existing:
-                try:
-                    conn.exec_driver_sql(f'ALTER TABLE "{table}" ADD COLUMN "{col}" {col_type}')
-                except Exception:
-                    logging.exception("Failed to add column %s to %s", col, table)
-                    # continue attempting others
-
-# new helper to create indexes in runtime (dev)
-def _ensure_indexes(engine) -> None:
-    """
-    Create indexes only on columns that actually exist in the DB.
-    This avoids sqlite OperationalError when a column (e.g. 'direction') is missing.
-    """
-    with engine.begin() as conn:
-        try:
-            # inspect existing columns
-            res = conn.exec_driver_sql("PRAGMA table_info('transaction')").fetchall()
-            existing_cols = [r[1] for r in res]
-
-            if "date" in existing_cols:
-                conn.exec_driver_sql('CREATE INDEX IF NOT EXISTS idx_transaction_date ON "transaction" (date)')
-            # prefer 'direction' but fall back to legacy 'type'
-            col_for_direction = "direction" if "direction" in existing_cols else ("type" if "type" in existing_cols else None)
-            if col_for_direction:
-                conn.exec_driver_sql(f'CREATE INDEX IF NOT EXISTS idx_transaction_direction ON "transaction" ("{col_for_direction}")')
-            if "major_category" in existing_cols:
-                conn.exec_driver_sql('CREATE INDEX IF NOT EXISTS idx_transaction_major ON "transaction" (major_category)')
-        except Exception:
-            logging.exception("Failed to ensure indexes")
-
-def create_db_and_tables() -> None:
-    """Ensure data directory exists and create DB tables."""
-    _ensure_data_dir(DATA_DIR)
-    SQLModel.metadata.create_all(engine)
-
-    expected_tx_cols = {
-        "major_category": "TEXT",
-        "sub_category": "TEXT",
-        "category": "TEXT",
-        "description": "TEXT",
-        "account": "TEXT",
-        "remarks": "TEXT",
-        "raw_source": "TEXT",
-        "type": "TEXT"
-    }
-
-    try:
-        _ensure_columns(engine, "transaction", expected_tx_cols)
-    except Exception:
-        # startup tolerant: 실패시 로깅만 하고 계속 진행
-        logging.exception("create_db_and_tables: _ensure_columns failed")
-
-    # ensure indexes for quicker queries
-    try:
-        _ensure_indexes(engine)
-    except Exception:
-        logging.exception("create_db_and_tables: _ensure_indexes failed")
+__all__ = [
+    "DATA_DIR",
+    "DB_FILE",
+    "DATABASE_URL",
+    "engine",
+    "TransactionBase",
+    "Transaction",
+    "FixedExpense",
+    "Saving",
+    "CategoryMajor",
+    "CategorySub",
+    "create_db_and_tables",
+]

@@ -51,3 +51,4 @@ backend/data/app.db
 *.db
 backend/data/app.db_20260222
 backend/data/app.db
+backend/.coverage

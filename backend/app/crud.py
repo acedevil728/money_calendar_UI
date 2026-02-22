@@ -4,7 +4,6 @@ from typing import List, Optional, Dict, Any, Union, Tuple
 from collections import defaultdict
 from datetime import date, datetime
 import calendar
-import logging
 from sqlalchemy import func
 
 def get_session():
@@ -165,11 +164,7 @@ def update_transaction(transaction_id: int, patch: Dict[str, Any]) -> Optional[T
     Patch values are normalized (dates, amounts, direction) before applying.
     """
     # normalize patch in-place (but do not require all fields)
-    try:
-        normalized_patch = _normalize_tx_dict(dict(patch))
-    except ValueError as ve:
-        # bubble up to caller to convert to HTTP error handler
-        raise
+    normalized_patch = _normalize_tx_dict(dict(patch))
 
     with Session(engine) as session:
         tx = session.get(Transaction, transaction_id)
@@ -200,6 +195,26 @@ def delete_transaction(transaction_id: int) -> bool:
         return True
 
 
+def _build_fixed_expense_transactions(fe: FixedExpense) -> List[Transaction]:
+    occurrences: List[Transaction] = []
+    for y, m in _iter_months(fe.start_date, fe.end_date):
+        last_day = calendar.monthrange(y, m)[1]
+        day = min(fe.day_of_month, last_day)
+        occ_date = date(y, m, day)
+        occurrences.append(
+            Transaction(
+                date=occ_date,
+                amount=float(fe.amount),
+                direction="Expense",
+                major_category=fe.major_category,
+                sub_category=fe.sub_category,
+                description=fe.description,
+                raw_source=f"fixed:{fe.id}",
+            )
+        )
+    return occurrences
+
+
 def create_fixed_expense(data: Dict[str, Any]) -> FixedExpense:
     """
     Create FixedExpense and generate Transaction occurrences for each month in the range.
@@ -213,11 +228,8 @@ def create_fixed_expense(data: Dict[str, Any]) -> FixedExpense:
             raise ValueError(f"Missing required field: {k}")
 
     # coerce types
-    try:
-        start = _coerce_date(data["start_date"], "start_date")
-        end = _coerce_date(data["end_date"], "end_date")
-    except ValueError:
-        raise
+    start = _coerce_date(data["start_date"], "start_date")
+    end = _coerce_date(data["end_date"], "end_date")
 
     try:
         amt = float(data["amount"])
@@ -239,31 +251,15 @@ def create_fixed_expense(data: Dict[str, Any]) -> FixedExpense:
         active=data.get("active", True)
     )
 
-    occurrences: List[Transaction] = []
     with Session(engine) as session:
         session.add(fe)
         session.commit()
         session.refresh(fe)
 
-        # generate transactions for each month in range
-        s = fe.start_date
-        e = fe.end_date
-        for y, m in _iter_months(s, e):
-            last_day = calendar.monthrange(y, m)[1]
-            day = min(fe.day_of_month, last_day)
-            occ_date = date(y, m, day)
-            # create transaction linked to fixed expense
-            tx = Transaction(
-                date=occ_date,
-                amount=float(fe.amount),
-                direction="Expense",
-                major_category=fe.major_category,
-                sub_category=fe.sub_category,
-                description=fe.description,
-                raw_source=f"fixed:{fe.id}"
-            )
+        occurrences = _build_fixed_expense_transactions(fe)
+        for tx in occurrences:
             session.add(tx)
-            occurrences.append(tx)
+
         session.commit()
         for t in occurrences:
             session.refresh(t)
@@ -328,24 +324,10 @@ def update_fixed_expense(fe_id: int, patch: Dict[str, Any]) -> Optional[FixedExp
         session.commit()
 
         # re-generate occurrences
-        occurrences: List[Transaction] = []
-        s = fe.start_date
-        e = fe.end_date
-        for y, m in _iter_months(s, e):
-            last_day = calendar.monthrange(y, m)[1]
-            day = min(fe.day_of_month, last_day)
-            occ_date = date(y, m, day)
-            tx = Transaction(
-                date=occ_date,
-                amount=float(fe.amount),
-                direction="Expense",
-                major_category=fe.major_category,
-                sub_category=fe.sub_category,
-                description=fe.description,
-                raw_source=f"fixed:{fe.id}"
-            )
+        occurrences = _build_fixed_expense_transactions(fe)
+        for tx in occurrences:
             session.add(tx)
-            occurrences.append(tx)
+
         session.commit()
         for t in occurrences:
             session.refresh(t)
@@ -368,18 +350,6 @@ def _iter_months(start: date, end: date):
         y = ym // 12
         m = ym % 12 + 1
         yield y, m
-
-
-def _compute_default_range(all_tx: List[Transaction]) -> Tuple[date, date]:
-    if all_tx:
-        dates = [t.date for t in all_tx if getattr(t, "date", None) is not None]
-        if dates:
-            return (min(dates), max(dates))
-    today = date.today()
-    start = date(today.year, today.month, 1)
-    last_day = calendar.monthrange(today.year, today.month)[1]
-    end = date(today.year, today.month, last_day)
-    return (start, end)
 
 def get_summary(start: Optional[date] = None, end: Optional[date] = None) -> Dict[str, Any]:
     """

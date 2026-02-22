@@ -169,9 +169,7 @@ curl -X POST "http://localhost:8000/api/settings/categories" \
   - SQLModel 모델(`Transaction`, `FixedExpense`, `Saving`, `CategoryMajor`, `CategorySub`)
   - SQLite 엔진 생성, 데이터 디렉터리 보장, 스키마 보정(누락 컬럼/인덱스 생성)
 - `/Users/bskoon/Documents/GitHub/money_calendar_UI/backend/app/models.py`
-  - `models_core`의 모델/엔진 생성 함수를 재노출하는 호환 레이어
-- `/Users/bskoon/Documents/GitHub/money_calendar_UI/backend/app/models/transaction.py`
-  - SQLAlchemy(declarative) 기반 구모델 정의(호환/참고용 코드)
+  - 모델 정의의 중복을 제거하기 위해 `models_core` 심볼만 재노출하는 호환 레이어
 - `/Users/bskoon/Documents/GitHub/money_calendar_UI/backend/alembic/versions/0001_add_direction_column.py`
   - `transaction.direction` 컬럼 추가 및 기존 `type` 값 복사 마이그레이션
 - `/Users/bskoon/Documents/GitHub/money_calendar_UI/backend/alembic/versions/0002_create_indexes.py`

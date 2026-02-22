@@ -1,10 +1,9 @@
-from fastapi import FastAPI, Depends, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse, PlainTextResponse
-from sqlmodel import Session
 from datetime import datetime, date
 from typing import Optional, List
 from .models_core import create_db_and_tables
-from .crud import get_session, create_transactions_bulk, list_transactions, get_summary, create_fixed_expense, list_fixed_expenses, query_transactions, get_transaction, get_categories, get_transactions, update_transaction, delete_transaction, get_fixed_expense, update_fixed_expense, delete_fixed_expense, create_saving, list_savings, get_saving, update_saving, delete_saving, forecast_savings, get_setting_categories, set_setting_categories
+from .crud import create_transactions_bulk, get_summary, create_fixed_expense, list_fixed_expenses, query_transactions, get_transaction, get_categories, update_transaction, delete_transaction, update_fixed_expense, delete_fixed_expense, create_saving, list_savings, update_saving, delete_saving, forecast_savings, get_setting_categories, set_setting_categories
 import logging
 import csv
 
@@ -25,6 +24,65 @@ def _parse_date_param(s: Optional[str], name: str) -> Optional[date]:
         raise HTTPException(status_code=400, detail=f"Invalid {name} format. Expected YYYY-MM-DD")
 
 
+def _is_income_direction(direction: Optional[str]) -> bool:
+    s = (direction or "").lower()
+    return ("income" in s) or (direction == "수입")
+
+
+def _serialize_transaction(t) -> dict:
+    return {
+        "id": getattr(t, "id", None),
+        "date": getattr(t, "date", None).isoformat() if getattr(t, "date", None) else None,
+        "type": getattr(t, "direction", None),
+        "major_category": getattr(t, "major_category", None),
+        "sub_category": getattr(t, "sub_category", None),
+        "amount": getattr(t, "amount", None),
+        "description": getattr(t, "description", None),
+    }
+
+
+def _serialize_fixed_expense(fe) -> dict:
+    return {
+        "id": fe.id,
+        "major_category": fe.major_category,
+        "sub_category": fe.sub_category,
+        "description": fe.description,
+        "amount": fe.amount,
+        "start_date": fe.start_date.isoformat() if fe.start_date else None,
+        "end_date": fe.end_date.isoformat() if fe.end_date else None,
+        "day_of_month": fe.day_of_month,
+        "active": fe.active,
+    }
+
+
+def _serialize_saving(it) -> dict:
+    return {
+        "id": it.id,
+        "name": it.name,
+        "kind": it.kind,
+        "initial_balance": it.initial_balance,
+        "contribution_amount": it.contribution_amount,
+        "start_date": it.start_date.isoformat() if it.start_date else None,
+        "end_date": it.end_date.isoformat() if it.end_date else None,
+        "day_of_month": it.day_of_month,
+        "frequency": it.frequency,
+        "withdrawn": it.withdrawn,
+        "active": it.active,
+    }
+
+
+def _build_summary_map(items) -> dict:
+    summary_map = {}
+    for t in items:
+        type_key = (t.direction or "unknown").lower()
+        major = t.major_category or "(No major)"
+        sub = t.sub_category or "(No sub)"
+        summary_map.setdefault(type_key, {})
+        summary_map[type_key].setdefault(major, {})
+        summary_map[type_key][major][sub] = summary_map[type_key][major].get(sub, 0) + float(t.amount or 0)
+    return summary_map
+
+
 @app.get("/api/transactions")
 def api_transactions(start: Optional[str] = Query(None), end: Optional[str] = Query(None),
                      type: Optional[str] = Query(None), search: Optional[str] = Query(None),
@@ -41,18 +99,7 @@ def api_transactions(start: Optional[str] = Query(None), end: Optional[str] = Qu
 
     try:
         items, total = query_transactions(parsed_start, parsed_end, type, search, page, per_page)
-        # convert SQLModel instances to dicts (safe for JSON)
-        out = []
-        for t in items:
-            out.append({
-                "id": getattr(t, "id", None),
-                "date": getattr(t, "date", None).isoformat() if getattr(t, "date", None) else None,
-                "type": getattr(t, "direction", None),
-                "major_category": getattr(t, "major_category", None),
-                "sub_category": getattr(t, "sub_category", None),
-                "amount": getattr(t, "amount", None),
-                "description": getattr(t, "description", None),
-            })
+        out = [_serialize_transaction(t) for t in items]
         return {"items": out, "total": total, "page": page, "per_page": per_page}
     except Exception as e:
         logging.exception("api_transactions error")
@@ -150,7 +197,7 @@ def api_daily(start: Optional[str] = Query(None), end: Optional[str] = Query(Non
         if key not in out:
             out[key] = {"date": key, "income": 0.0, "expense": 0.0, "transactions": []}
         amt = float(t.amount or 0)
-        is_income = (t.direction or "").lower().find("income") >= 0 or (t.direction == "수입")
+        is_income = _is_income_direction(t.direction)
         if is_income:
             out[key]["income"] += amt
         else:
@@ -185,7 +232,7 @@ def api_calendar(year: Optional[int] = Query(None), month: Optional[int] = Query
         if key not in days:
             days[key] = {"income": 0.0, "expense": 0.0, "count": 0}
         amt = float(t.amount or 0)
-        is_income = (t.direction or "").lower().find("income") >= 0 or (t.direction == "수입")
+        is_income = _is_income_direction(t.direction)
         if is_income:
             days[key]["income"] += amt
         else:
@@ -211,15 +258,7 @@ def api_transactions_export(start: Optional[str] = Query(None), end: Optional[st
         for t in items:
             writer.writerow([t.id, t.date.isoformat() if t.date else "", t.direction, t.major_category, t.sub_category, t.amount, t.description or ""])
     else:
-        # summary: type,major,sub,amount
-        summary_map = {}
-        for t in items:
-            type_key = (t.direction or "unknown").lower()
-            major = t.major_category or "(No major)"
-            sub = t.sub_category or "(No sub)"
-            summary_map.setdefault(type_key, {})
-            summary_map[type_key].setdefault(major, {})
-            summary_map[type_key][major][sub] = summary_map[type_key][major].get(sub, 0) + float(t.amount or 0)
+        summary_map = _build_summary_map(items)
         writer.writerow(["type", "major", "sub", "amount"])
         for tk in summary_map:
             for mj in summary_map[tk]:
@@ -248,19 +287,7 @@ def health():
 def api_fixed_expenses():
     try:
         fes = list_fixed_expenses()
-        out = []
-        for fe in fes:
-            out.append({
-                "id": fe.id,
-                "major_category": fe.major_category,
-                "sub_category": fe.sub_category,
-                "description": fe.description,
-                "amount": fe.amount,
-                "start_date": fe.start_date.isoformat() if fe.start_date else None,
-                "end_date": fe.end_date.isoformat() if fe.end_date else None,
-                "day_of_month": fe.day_of_month,
-                "active": fe.active
-            })
+        out = [_serialize_fixed_expense(fe) for fe in fes]
         return out
     except Exception:
         logging.exception("list_fixed_expenses failed")
@@ -303,21 +330,7 @@ def api_fixed_expense_delete(fe_id: int):
 def api_savings_list():
     try:
         s = list_savings()
-        out = []
-        for it in s:
-            out.append({
-                "id": it.id,
-                "name": it.name,
-                "kind": it.kind,
-                "initial_balance": it.initial_balance,
-                "contribution_amount": it.contribution_amount,
-                "start_date": it.start_date.isoformat() if it.start_date else None,
-                "end_date": it.end_date.isoformat() if it.end_date else None,
-                "day_of_month": it.day_of_month,
-                "frequency": it.frequency,
-                "withdrawn": it.withdrawn,
-                "active": it.active
-            })
+        out = [_serialize_saving(it) for it in s]
         return out
     except Exception:
         logging.exception("list_savings failed")
