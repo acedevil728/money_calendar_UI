@@ -48,3 +48,6 @@ Thumbs.db
 
 # Own app.db
 backend/data/app.db
+*.db
+backend/data/app.db_20260222
+backend/data/app.db
